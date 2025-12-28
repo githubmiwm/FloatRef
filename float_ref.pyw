@@ -15,9 +15,11 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QDialog, QTextEdit, QInputDialog, QSpinBox, QCheckBox, QDialogButtonBox, QComboBox, QGroupBox, QStyle)
 from PyQt6.QtGui import (QPixmap, QPainter, QPen, QColor, QFont, QCursor, QIcon, 
                          QAction, QActionGroup, QImageReader, QImage, QPolygon)
-from PyQt6.QtCore import (Qt, QSize, QRect, QPoint, QPointF, QRectF, QTimer, pyqtSignal, QObject,
+from PyQt6.QtCore import (Qt, QSize, QRect, QPoint, QPointF, QRectF, 
+                          QTimer, pyqtSignal, QObject,
                           QPropertyAnimation, QEasingCurve, QParallelAnimationGroup,
-                          QVariantAnimation, QAbstractAnimation, QSettings, QThreadPool, QRunnable, pyqtSlot)
+                          QVariantAnimation, QAbstractAnimation, QSettings, QThreadPool, QRunnable, pyqtSlot,
+                          QSharedMemory)
 
 # ---------------------------------------------------------
 # Windows API Constants & Setup (Strict Typing)
@@ -67,13 +69,8 @@ def get_window_ex_style(hwnd):
 
 def set_window_on_top_native(hwnd, on_top=True):
     """Windows APIを使ってウィンドウの最前面状態を切り替える"""
-    
-    # ハンドルがint型で来てもctypesのHWND型に変換
     hwnd_c = wintypes.HWND(int(hwnd))
-
     target_z_order = HWND_TOPMOST if on_top else HWND_NOTOPMOST
-    
-    # API実行
     user32.SetWindowPos(hwnd_c, target_z_order, 0, 0, 0, 0, 
                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
 
@@ -82,7 +79,6 @@ def set_window_on_top_native(hwnd, on_top=True):
 # ---------------------------------------------------------
 def setup_logging():
     log_filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug.log')
-    # filemode='w' で起動ごとにログをクリア（上書き）
     logging.basicConfig(
         level=logging.DEBUG,
         filename=log_filename,
@@ -102,7 +98,6 @@ def setup_logging():
     sys.excepthook = handle_exception
 
 setup_logging()
-logging.info("Application starting... (Log cleared)")
 
 # ---------------------------------------------------------
 # Startup Shortcut Helper
@@ -444,15 +439,13 @@ class SwitchButton(QWidget):
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.MouseButton.RightButton and self.drag_pos:
             curr_pos = event.globalPosition().toPoint()
-            # 一定距離以上動いたらドラッグとみなす
             if (curr_pos - self.drag_start_global).manhattanLength() > 5:
                 self.is_dragging = True
-                self.move(curr_pos - self.drag_pos)
+            self.move(curr_pos - self.drag_pos)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton:
             if not self.is_dragging:
-                # ドラッグでなければメニュー表示
                 if self.manager:
                     self.manager.tray_menu.exec(event.globalPosition().toPoint())
         self.drag_pos = None
@@ -470,210 +463,11 @@ class SwitchButton(QWidget):
         painter.drawEllipse(rect)
 
 # ---------------------------------------------------------
-# Custom Dialog for Settings
-# ---------------------------------------------------------
-class SlideshowSettingsDialog(QDialog):
-    def __init__(self, params, get_text_func, parent=None):
-        super().__init__(parent)
-        self.get_text = get_text_func
-        self.setWindowTitle(self.get_text('settings_title'))
-        self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
-        self.setMinimumWidth(320)
-        self.reset_requested = False 
-        
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        
-        h_lang = QHBoxLayout()
-        h_lang.addWidget(QLabel(self.get_text('language')))
-        self.combo_lang = QComboBox()
-        self.combo_lang.addItem("日本語", "ja")
-        self.combo_lang.addItem("English", "en")
-        current_lang = params.get('language', 'ja')
-        idx = self.combo_lang.findData(current_lang)
-        if idx >= 0: self.combo_lang.setCurrentIndex(idx)
-        h_lang.addWidget(self.combo_lang)
-        h_lang.addStretch()
-        layout.addLayout(h_lang)
-
-        grp_slide = QGroupBox(self.get_text('slideshow_group'))
-        v_slide = QVBoxLayout()
-        self.chk_active = QCheckBox(self.get_text('active'))
-        self.chk_active.setChecked(params['active'])
-        v_slide.addWidget(self.chk_active)
-        self.chk_random = QCheckBox(self.get_text('random'))
-        self.chk_random.setChecked(params['random'])
-        v_slide.addWidget(self.chk_random)
-        h_interval = QHBoxLayout()
-        h_interval.addWidget(QLabel(self.get_text('interval')))
-        self.spin_interval = QSpinBox()
-        self.spin_interval.setRange(1, 3600)
-        self.spin_interval.setValue(params['interval'])
-        self.spin_interval.setSuffix(self.get_text('interval_suffix'))
-        h_interval.addWidget(self.spin_interval)
-        v_slide.addLayout(h_interval)
-        v_fade = QVBoxLayout()
-        h_fade_label = QHBoxLayout()
-        h_fade_label.addWidget(QLabel(self.get_text('fade')))
-        self.label_fade_val = QLabel(f"{params['fade']:.1f}" + self.get_text('fade_suffix'))
-        h_fade_label.addWidget(self.label_fade_val)
-        h_fade_label.addStretch()
-        v_fade.addLayout(h_fade_label)
-        self.slider_fade = QSlider(Qt.Orientation.Horizontal)
-        self.slider_fade.setRange(0, 50) 
-        self.slider_fade.setValue(int(params['fade'] * 10))
-        self.slider_fade.valueChanged.connect(lambda v: self.label_fade_val.setText(f"{v/10.0:.1f}" + self.get_text('fade_suffix')))
-        v_fade.addWidget(self.slider_fade)
-        v_slide.addLayout(v_fade)
-        grp_slide.setLayout(v_slide)
-        layout.addWidget(grp_slide)
-
-        grp_view = QGroupBox(self.get_text('view_group'))
-        v_view = QVBoxLayout()
-        h_layer = QHBoxLayout()
-        h_layer.addWidget(QLabel(self.get_text('layer')))
-        self.combo_layer = QComboBox()
-        self.combo_layer.addItems([self.get_text('layer_top'), self.get_text('layer_normal'), self.get_text('layer_bottom')])
-        layer_map = {'top': 0, 'normal': 1, 'bottom': 2}
-        self.combo_layer.setCurrentIndex(layer_map.get(params['layer_mode'], 1))
-        h_layer.addWidget(self.combo_layer)
-        v_view.addLayout(h_layer)
-        
-        h_anchor = QHBoxLayout()
-        h_anchor.addWidget(QLabel(self.get_text('anchor_group')))
-        self.combo_anchor = QComboBox()
-        anchors = [
-            ('center', 'anchor_center'),
-            ('top-left', 'anchor_top_left'),
-            ('top-right', 'anchor_top_right'),
-            ('bottom-left', 'anchor_bottom_left'),
-            ('bottom-right', 'anchor_bottom_right')
-        ]
-        for key, text_key in anchors:
-            self.combo_anchor.addItem(self.get_text(text_key), key)
-            
-        current_anchor = params.get('anchor_mode', 'center')
-        idx = self.combo_anchor.findData(current_anchor)
-        if idx >= 0: self.combo_anchor.setCurrentIndex(idx)
-        else: self.combo_anchor.setCurrentIndex(0)
-        
-        h_anchor.addWidget(self.combo_anchor)
-        v_view.addLayout(h_anchor)
-        
-        h_thumb = QHBoxLayout()
-        h_thumb.addWidget(QLabel(self.get_text('thumb_pos')))
-        self.combo_thumb = QComboBox()
-        self.combo_thumb.addItems([self.get_text('pos_top'), self.get_text('pos_bottom')])
-        self.combo_thumb.setCurrentIndex(0 if params['carousel_pos'] == 'top' else 1)
-        h_thumb.addWidget(self.combo_thumb)
-        v_view.addLayout(h_thumb)
-        self.chk_show_carousel = QCheckBox(self.get_text('show_carousel'))
-        self.chk_show_carousel.setChecked(params['show_carousel'])
-        v_view.addWidget(self.chk_show_carousel)
-        grp_view.setLayout(v_view)
-        layout.addWidget(grp_view)
-
-        grp_btn = QGroupBox(self.get_text('btn_group'))
-        v_btn = QVBoxLayout()
-        self.chk_btn_visible = QCheckBox(self.get_text('btn_visible'))
-        self.chk_btn_visible.setChecked(params['btn_visible'])
-        v_btn.addWidget(self.chk_btn_visible)
-        
-        v_btn_size = QVBoxLayout()
-        h_btn_size_label = QHBoxLayout()
-        h_btn_size_label.addWidget(QLabel(self.get_text('btn_size')))
-        self.label_size_val = QLabel(f"{params['btn_size']} px")
-        h_btn_size_label.addWidget(self.label_size_val)
-        h_btn_size_label.addStretch()
-        v_btn_size.addLayout(h_btn_size_label)
-        self.slider_size = QSlider(Qt.Orientation.Horizontal)
-        self.slider_size.setRange(1, 20) 
-        self.slider_size.setValue(int(params['btn_size'] / 10))
-        self.slider_size.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.slider_size.setTickInterval(1)
-        self.slider_size.valueChanged.connect(lambda v: self.label_size_val.setText(f"{v * 10} px"))
-        v_btn_size.addWidget(self.slider_size)
-        v_btn.addLayout(v_btn_size)
-        
-        v_opacity = QVBoxLayout()
-        h_op_label = QHBoxLayout()
-        h_op_label.addWidget(QLabel(self.get_text('btn_opacity')))
-        self.label_op_val = QLabel(f"{int(params['btn_opacity'] * 100)}%")
-        h_op_label.addWidget(self.label_op_val)
-        h_op_label.addStretch()
-        v_opacity.addLayout(h_op_label)
-        self.slider_opacity = QSlider(Qt.Orientation.Horizontal)
-        self.slider_opacity.setRange(0, 4) 
-        self.slider_opacity.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.slider_opacity.setTickInterval(1)
-        current_op_step = int(params['btn_opacity'] * 4)
-        self.slider_opacity.setValue(current_op_step)
-        self.slider_opacity.valueChanged.connect(lambda v: self.label_op_val.setText(f"{v * 25}%"))
-        v_opacity.addWidget(self.slider_opacity)
-        v_btn.addLayout(v_opacity)
-        
-        grp_btn.setLayout(v_btn)
-        layout.addWidget(grp_btn)
-
-        self.chk_startup = QCheckBox(self.get_text('startup'))
-        self.chk_startup.setChecked(params['startup'])
-        layout.addWidget(self.chk_startup)
-        
-        layout.addSpacing(10)
-
-        hbox_btns = QHBoxLayout()
-        btn_reset = QPushButton(self.get_text('reset_btn'))
-        btn_reset.clicked.connect(self.reset_form)
-        hbox_btns.addWidget(btn_reset)
-        hbox_btns.addStretch()
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        hbox_btns.addWidget(btns)
-        
-        layout.addLayout(hbox_btns)
-        self.adjustSize() 
-
-    def reset_form(self):
-        self.chk_active.setChecked(False)
-        self.chk_random.setChecked(False)
-        self.spin_interval.setValue(10)
-        self.slider_fade.setValue(10) 
-        self.combo_layer.setCurrentIndex(1) 
-        self.combo_anchor.setCurrentIndex(0) 
-        self.combo_thumb.setCurrentIndex(0) 
-        self.chk_show_carousel.setChecked(True) 
-        self.chk_btn_visible.setChecked(False)
-        self.slider_size.setValue(4) 
-        self.slider_opacity.setValue(2) 
-        self.chk_startup.setChecked(False)
-        self.reset_requested = True
-
-    def get_values(self):
-        layer_indices = {0: 'top', 1: 'normal', 2: 'bottom'}
-        return {
-            'language': self.combo_lang.currentData(),
-            'interval': self.spin_interval.value(),
-            'active': self.chk_active.isChecked(),
-            'random': self.chk_random.isChecked(),
-            'fade': self.slider_fade.value() / 10.0,
-            'layer_mode': layer_indices[self.combo_layer.currentIndex()],
-            'anchor_mode': self.combo_anchor.currentData(), 
-            'carousel_pos': 'top' if self.combo_thumb.currentIndex() == 0 else 'bottom',
-            'show_carousel': self.chk_show_carousel.isChecked(),
-            'btn_visible': self.chk_btn_visible.isChecked(),
-            'btn_size': self.slider_size.value() * 10,
-            'btn_opacity': self.slider_opacity.value() * 0.25,
-            'startup': self.chk_startup.isChecked(),
-            'reset_requested': self.reset_requested
-        }
-
-# ---------------------------------------------------------
 # Window Manager
 # ---------------------------------------------------------
-class WindowManager:
+class WindowManager(QObject):
     def __init__(self):
+        super().__init__()
         self.windows = []
         self.settings = QSettings("Tokitoma", "FloatRef")
         self.is_locked = False 
@@ -809,7 +603,6 @@ class WindowManager:
             self.switch_button.raise_()
 
     def suspend_layers(self):
-        # ログ削除: logging.info("Suspending always-on-top for dialog using native API.")
         for w in self.windows:
             hwnd = int(w.winId())
             set_window_on_top_native(hwnd, False)
@@ -818,14 +611,10 @@ class WindowManager:
             set_window_on_top_native(hwnd_btn, False)
 
     def restore_layers(self):
-        # ログ削除: logging.info("Restoring original layer settings using native API.")
         is_top = (self.params['layer_mode'] == 'top')
         for w in self.windows:
             hwnd = int(w.winId())
-            if is_top:
-                set_window_on_top_native(hwnd, True)
-            else:
-                set_window_on_top_native(hwnd, False)
+            set_window_on_top_native(hwnd, is_top)
         if self.switch_button.isVisible():
             hwnd_btn = int(self.switch_button.winId())
             set_window_on_top_native(hwnd_btn, True)
@@ -862,7 +651,7 @@ class WindowManager:
                 new_window.move(last_win.pos() + QPoint(30, 30))
                 if not next_image:
                     new_window.current_index = last_win.current_index
-                    new_window.update_image_source()
+            new_window.update_image_source()
         
         if size:
             new_window.resize(size)
@@ -873,7 +662,6 @@ class WindowManager:
         return new_window
 
     def open_multiple_windows(self, items):
-        # リスト選択時は自動整列させず、リスト上の位置から拡大表示する
         for index, rect in items:
             win = self.create_window(pos=rect.topLeft(), size=rect.size())
             win.current_index = index
@@ -882,8 +670,6 @@ class WindowManager:
             if win.pixmap:
                 win.calculate_fit_scale()
                 win.resize_window_to_image_size()
-                
-                # 中心から広がるように配置
                 center = rect.center()
                 geo = win.geometry()
                 new_x = center.x() - (geo.width() // 2)
@@ -899,14 +685,10 @@ class WindowManager:
         count = len(self.windows)
         cols = math.ceil(math.sqrt(count))
         rows = math.ceil(count / cols)
-        
-        # 画面サイズベースのセルサイズ（最大）
         cell_w = screen.width() // cols
         cell_h = screen.height() // rows
 
-        # 縮小率の計算
         min_ratio = 1.0
-        
         for win in self.windows:
             w, h = win.width(), win.height()
             r_w = cell_w / w if w > cell_w else 1.0
@@ -915,31 +697,20 @@ class WindowManager:
             if ratio < min_ratio:
                 min_ratio = ratio
 
-        # 適用
         for i, win in enumerate(self.windows):
             r = i // cols
             c = i % cols
-            
-            # 配置位置（左上基準）
             base_x = screen.left() + c * cell_w
             base_y = screen.top() + r * cell_h
-            
-            # 新しいサイズ
             new_w = int(win.width() * min_ratio)
             new_h = int(win.height() * min_ratio)
-            
-            # 中央寄せ座標
             target_x = base_x + (cell_w - new_w) // 2
             target_y = base_y + (cell_h - new_h) // 2
-            
-            # ウィンドウサイズ更新
             win.setGeometry(target_x, target_y, new_w, new_h)
             
-            # 画像の見た目（スケールとオフセット）も縮小率に合わせて更新
             if win.pixmap:
                 win.scale_factor *= min_ratio
                 win.img_offset *= min_ratio
-            
             win.update_satellites()
         
         self.bring_switch_to_front()
@@ -957,10 +728,6 @@ class WindowManager:
         self.switch_button.setWindowFlags(flags)
         if self.params['btn_visible']:
             self.switch_button.show()
-        self.update_layer_menu_check()
-
-    def update_layer_menu_check(self):
-        pass # メニュー項目削除により何もしない
 
     def toggle_all_visibility(self):
         any_visible = any(w.isVisible() for w in self.windows)
@@ -970,12 +737,9 @@ class WindowManager:
             self.show_hidden_windows()
 
     def toggle_global_carousel(self):
-        # カルーセルの表示設定をトグル
         new_state = not self.params['show_carousel']
         self.params['show_carousel'] = new_state
         self.settings.setValue("show_carousel", new_state)
-        
-        # 全ウィンドウに適用
         for w in self.windows:
             w.refresh_carousel_visibility()
 
@@ -987,7 +751,6 @@ class WindowManager:
     def open_settings(self):
         self.params['startup'] = is_startup_enabled()
         self.suspend_layers()
-        
         dialog = SlideshowSettingsDialog(self.params, self.tr)
         
         cursor_pos = QCursor.pos()
@@ -1014,7 +777,7 @@ class WindowManager:
             if new_params['reset_requested']:
                 self.settings.remove("btn_pos")
                 self.settings.remove("geometry")
-                self.settings.remove("window_states") # Reset saved windows
+                self.settings.remove("window_states")
                 self.switch_button.move(100, 100)
                 self.act_lock.setChecked(False)
                 self.toggle_operation_lock()
@@ -1038,7 +801,6 @@ class WindowManager:
             
             self.retranslate_ui()
             self.apply_settings()
-        
         self.restore_layers()
 
     def apply_settings(self):
@@ -1053,8 +815,6 @@ class WindowManager:
                 w.start_slideshow()
             else:
                 w.stop_slideshow()
-            
-            # カルーセルの表示状態も更新
             w.refresh_carousel_visibility()
         
         self.switch_button.set_properties(self.params['btn_size'], self.params['btn_opacity'])
@@ -1062,20 +822,20 @@ class WindowManager:
             self.switch_button.show()
         else:
             self.switch_button.hide()
-        
         self.set_global_layer(self.params['layer_mode'])
 
     def show_hidden_windows(self):
         if not self.windows:
-            self.restore_window_states() # Use restore logic if list empty
+            self.restore_window_states() 
             if not self.windows:
                 self.create_window()
         else:
             for w in self.windows:
                 if not w.isVisible():
                     w.showNormal()
-                    w.activateWindow()
-                    w.raise_()
+                w.activateWindow()
+                w.raise_()
+        self.bring_switch_to_front()
 
     def hide_all_windows(self):
         for w in self.windows:
@@ -1083,55 +843,43 @@ class WindowManager:
 
     def confirm_close_all_images(self):
         self.suspend_layers()
-        
         msg = QMessageBox(QMessageBox.Icon.Question, self.tr('msg_close_title'), self.tr('msg_close_text'),
-                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         msg.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         msg.setWindowModality(Qt.WindowModality.ApplicationModal)
-        
         if msg.exec() == QMessageBox.StandardButton.Yes:
-            self.save_window_states() # Save before closing
+            self.save_window_states()
             for w in list(self.windows):
                 w.force_close()
             self.windows = []
-            
             self.settings.remove("window_states")
-            
-            self.create_window() # Start fresh with one
-            
+            self.create_window() 
         self.restore_layers()
 
     def reset_application(self):
         self.suspend_layers()
-        
         msg = QMessageBox(QMessageBox.Icon.Question, self.tr('msg_reset_title'), self.tr('msg_reset_text'),
                           QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         msg.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         msg.setWindowModality(Qt.WindowModality.ApplicationModal)
-        
         if msg.exec() == QMessageBox.StandardButton.Yes:
             for w in list(self.windows):
                 w.force_close()
             self.windows = []
-            
             stack_manager.clear_images()
             self.settings.remove("geometry")
             self.settings.remove("last_index")
             self.settings.remove("btn_pos")
             self.settings.remove("layer_mode")
             self.settings.remove("show_carousel")
-            self.settings.remove("window_states") # Clear saved states
-            
+            self.settings.remove("window_states")
             self.switch_button.move(100, 100)
             self.set_global_layer('normal')
             self.act_lock.setChecked(False)
             self.toggle_operation_lock()
-            
             self.params['language'] = 'ja'
             self.retranslate_ui()
-            
             self.create_window()
-        
         self.restore_layers()
 
     def on_tray_activated(self, reason):
@@ -1144,30 +892,21 @@ class WindowManager:
                     if w.isVisible():
                         w.activateWindow()
                         w.raise_()
+                self.bring_switch_to_front()
 
     def show_help(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # ★ 言語設定に合わせてファイル名を切り替える
         current_lang = self.params.get('language', 'ja')
-        if current_lang == 'en':
-            filename = "help_en.txt"
-        else:
-            filename = "help.txt"
-            
+        filename = "help_en.txt" if current_lang == 'en' else "help.txt"
         help_path = os.path.join(base_dir, filename)
-        
         content = f"Help file ({filename}) not found."
-        
         if os.path.exists(help_path):
             try:
                 with open(help_path, "r", encoding="utf-8") as f:
                     content = f.read()
             except Exception:
                 pass
-        
         self.suspend_layers()
-        
         dialog = QDialog()
         dialog.setWindowTitle(self.tr('help_title'))
         dialog.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
@@ -1179,11 +918,9 @@ class WindowManager:
         layout.addWidget(text_edit)
         dialog.resize(500, 400)
         dialog.exec()
-        
         self.restore_layers()
 
     def save_window_states(self):
-        """現在の全ウィンドウの状態を保存"""
         states = []
         for w in self.windows:
             geo = w.geometry()
@@ -1196,45 +933,36 @@ class WindowManager:
             }
             states.append(state)
         self.settings.setValue("window_states", json.dumps(states))
-        
         if self.windows:
             self.settings.setValue("last_index", self.windows[-1].current_index)
         self.settings.setValue("btn_pos", self.switch_button.pos())
 
     def restore_window_states(self):
-        """保存された状態からウィンドウを復元"""
         json_str = self.settings.value("window_states", "[]")
         try:
             states = json.loads(json_str)
         except Exception:
             states = []
-
         if states and isinstance(states, list):
             for s in states:
                 rect = s.get('rect')
                 idx = s.get('index', 0)
-                # 安全対策: キーがない場合は None が返る
                 off_x = s.get('offset_x')
                 off_y = s.get('offset_y')
                 scale = s.get('scale')
-                
                 if rect and len(rect) == 4:
                     win = self.create_window(pos=QPoint(rect[0], rect[1]), size=QSize(rect[2], rect[3]))
                     win.current_index = idx
                     win.update_image_source()
-                    
-                    # ★ オフセット情報が存在する場合のみ復元
                     if win.pixmap and off_x is not None and off_y is not None and scale is not None:
                         win.scale_factor = scale
                         win.img_offset = QPointF(off_x, off_y)
-                        win.update()
+                    win.update()
         else:
-            # データがない場合はデフォルト作成
             self.create_window()
 
     def close_all(self):
-        self.save_window_states() # 終了時に状態保存
-        
+        self.save_window_states() 
         for w in list(self.windows):
             w.force_close()
         self.switch_button.close()
@@ -1254,7 +982,6 @@ class ClickableLabel(QLabel):
     def wheelEvent(self, event):
         self.scrolled.emit(event.angleDelta().y())
     
-    # ダブルクリックは無視して親（CarouselWindow）に任せる
     def mouseDoubleClickEvent(self, event):
         event.ignore()
 
@@ -1266,7 +993,8 @@ class OverlayButton(QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet("""
             QPushButton {
-                background-color: rgba(0, 0, 0, 150); color: white;
+                background-color: rgba(0, 0, 0, 150);
+                color: white;
                 border: 1px solid rgba(255, 255, 255, 100); border-radius: 4px;
                 font-family: Arial; font-size: 10px; padding: 2px 8px;
             }
@@ -1287,7 +1015,6 @@ class OverlayButton(QPushButton):
 class CustomTooltip(QLabel):
     def __init__(self):
         super().__init__(None)
-        # 初期設定はOnTopだが、set_layerで制御される
         self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -1314,12 +1041,10 @@ class CustomTooltip(QLabel):
 # ---------------------------------------------------------
 class ListViewOverlay(QWidget):
     image_selected = pyqtSignal(int)
-    # 複数選択展開用シグナル: (index, global_rect) のリストを渡す
     images_selected_to_open = pyqtSignal(list)
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        # 常に最前面に固定 (ここが修正ポイント)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.layout = QVBoxLayout(self)
@@ -1329,7 +1054,6 @@ class ListViewOverlay(QWidget):
         self.top_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.top_bar.setSpacing(10)
         
-        # --- ボタン類の拡張 ---
         self.btn_select_all = QPushButton("All")
         self.btn_select_all.setFixedSize(40, 20)
         self.btn_select_all.clicked.connect(self.select_all_items)
@@ -1347,7 +1071,6 @@ class ListViewOverlay(QWidget):
         self.slider.setValue(150)
         self.slider.setFixedWidth(150)
         
-        # Closeボタンの追加
         self.btn_close = QPushButton("✕ Close")
         self.btn_close.setFixedSize(60, 20)
         self.btn_close.clicked.connect(self.hide)
@@ -1382,21 +1105,14 @@ class ListViewOverlay(QWidget):
         self.list_widget = QListWidget()
         self.list_widget.setViewMode(QListWidget.ViewMode.IconMode)
         self.list_widget.setResizeMode(QListWidget.ResizeMode.Adjust)
-        self.list_widget.setSpacing(10) # ★ Spacingを10に変更
+        self.list_widget.setSpacing(10) 
         self.list_widget.setIconSize(QSize(150, 150))
         self.list_widget.setMovement(QListWidget.Movement.Static)
-        
         self.list_widget.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.list_widget.setSelectionRectVisible(True) # ドラッグ範囲選択を有効化
+        self.list_widget.setSelectionRectVisible(True) 
         
-        # ★ マージンを5px確保して隙間を作る
         self.list_widget.setStyleSheet("""
-            QListWidget { 
-                background-color: transparent; 
-                border: none; 
-                outline: none; 
-                font-size: 0px; 
-            }
+            QListWidget { background-color: transparent; border: none; outline: none; font-size: 0px; }
             QListWidget::item { color: white; margin: 5px; }
             QListWidget::item:selected { background-color: rgba(255, 255, 255, 50); border-radius: 5px; }
             QScrollBar:vertical { border: none; background: rgba(255,255,255,20); width: 10px; }
@@ -1407,7 +1123,6 @@ class ListViewOverlay(QWidget):
         self.slider.valueChanged.connect(self.update_icon_size)
         self.btn_minus.clicked.connect(lambda: self.slider.setValue(self.slider.value() - 50))
         self.btn_plus.clicked.connect(lambda: self.slider.setValue(self.slider.value() + 50))
-        
         self.list_widget.itemActivated.connect(self.on_item_clicked)
         self.list_widget.viewport().installEventFilter(self)
         stack_manager.thumbnail_updated.connect(self.update_single_thumbnail)
@@ -1450,7 +1165,6 @@ class ListViewOverlay(QWidget):
     def open_selected(self):
         selected_items = self.list_widget.selectedItems()
         if not selected_items: return
-        
         items_to_open = []
         for item in selected_items:
             idx = item.data(Qt.ItemDataRole.UserRole)
@@ -1458,14 +1172,12 @@ class ListViewOverlay(QWidget):
             global_pos = self.list_widget.viewport().mapToGlobal(rect.topLeft())
             global_rect = QRect(global_pos, rect.size())
             items_to_open.append((idx, global_rect))
-        
         self.images_selected_to_open.emit(items_to_open)
         self.hide()
 
     def eventFilter(self, source, event):
         if source == self.list_widget.viewport():
             if event.type() == event.Type.MouseButtonDblClick:
-                # ログ削除済: 何もないところをダブルクリックしたら閉じる
                 if not self.list_widget.itemAt(event.pos()):
                     self.hide()
                     return True
@@ -1496,6 +1208,7 @@ class CarouselWindow(QWidget):
         self.buffer_count = 5 
         self.position_mode = 'top'
         self.fixed_height = 54
+        self.manager = parent_slot.manager
 
         self.setStyleSheet(f".CarouselWindow {{ background-color: rgba(0, 0, 0, 180); border-radius: 5px; }}")
 
@@ -1506,7 +1219,6 @@ class CarouselWindow(QWidget):
         self.container.setLayout(self.container_layout)
         
         self.labels = []
-        # 分離された選択枠
         self.selection_bg = QLabel(self)
         self.selection_bg.setFixedSize(self.thumb_w + 4, self.thumb_h + 4)
         self.selection_bg.setStyleSheet("background-color: rgba(0, 0, 0, 128); border: none;")
@@ -1544,7 +1256,6 @@ class CarouselWindow(QWidget):
         
         self.ideal_width = 0   
         self.base_x = 0        
-        self.logical_base_x = 0 
         self.current_visible_count = 0
         self.hide()
 
@@ -1561,65 +1272,50 @@ class CarouselWindow(QWidget):
         if not paths: 
             self.hide()
             return
-
         self.current_visible_count = self.calculate_visible_count()
         self.ideal_width = (self.unit_width * self.current_visible_count) + self.spacing
-        
         self.resize(self.ideal_width, self.fixed_height)
-
         needed_slots = self.current_visible_count + (self.buffer_count * 2)
         self.clear_container()
         self.labels = []
-        
         container_w = (self.unit_width * needed_slots) 
         self.container.resize(container_w, self.thumb_h) 
         self.container.setFixedHeight(self.thumb_h)
-        
-        self.logical_base_x = self.spacing - (self.buffer_count * self.unit_width)
-        self.base_x = self.logical_base_x
+        logical_base_x = self.spacing - (self.buffer_count * self.unit_width)
+        self.base_x = logical_base_x
         self.container.move(self.base_x, 2)
-
         target_visual_index = (self.current_visible_count - 1) // 2
         center_slot_idx = self.buffer_count + target_visual_index
-        
         for i in range(needed_slots):
             lbl = ClickableLabel()
             lbl.setFixedSize(self.thumb_w, self.thumb_h)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet("background-color: transparent;")
             lbl.scrolled.connect(self.handle_child_scroll)
-            
             offset = i - center_slot_idx
             lbl.clicked.connect(lambda o=offset: self.parent_slot.change_image(o))
             self.container_layout.addWidget(lbl)
             self.labels.append(lbl)
-
         self.refresh_thumbnails()
         self.update_position()
-        
-        # Zオーダー調整: 背景 < コンテナ < ボーダー < ボタン
         self.selection_bg.lower()
-        self.container.stackUnder(self.selection_border) # コンテナはボーダーの下
+        self.container.stackUnder(self.selection_border)
         self.selection_border.raise_()
         self.btn_prev.raise_()
         self.btn_next.raise_()
 
     def handle_child_scroll(self, angle):
-        if angle > 0:
-            self.parent_slot.change_image(-1)
-        else:
-            self.parent_slot.change_image(1)
+        if angle > 0: self.parent_slot.change_image(-1)
+        else: self.parent_slot.change_image(1)
 
     def refresh_thumbnails(self):
         paths = stack_manager.image_paths
         if not paths: return
         total_imgs = len(paths)
         current_idx = self.parent_slot.current_index % total_imgs
-        
         target_visual_index = (self.current_visible_count - 1) // 2
         center_slot_idx = self.buffer_count + target_visual_index
         start_offset = -center_slot_idx
-        
         for i, lbl in enumerate(self.labels):
             offset = start_offset + i
             img_idx = (current_idx + offset) % total_imgs
@@ -1638,47 +1334,28 @@ class CarouselWindow(QWidget):
         if not self.parent_slot.isVisible() or not stack_manager.image_paths:
             self.hide()
             return
-        
         parent_w = self.parent_slot.width()
-        
-        # カルーセル幅を親に合わせる (最大化)
         final_w = parent_w 
         self.resize(final_w, self.height())
-        
-        # 中央寄せ配置のためのオフセット計算
         center_x = (final_w - self.thumb_w) // 2
-        
-        # 枠と背景を中央に配置
-        self.selection_bg.move(center_x - 2, 0) # -2px for visual centering
+        self.selection_bg.move(center_x - 2, 0) 
         self.selection_border.move(center_x - 2, 0)
-        
-        # コンテナの配置
         active_item_index_in_container = self.buffer_count + (self.current_visible_count - 1) // 2
-        # ★ 修正: spacingを加算しない
         active_item_x_in_container = (active_item_index_in_container * self.unit_width)
-        
         self.base_x = center_x - active_item_x_in_container
-        
         if self.anim_slide.state() != QAbstractAnimation.State.Running:
             self.container.move(self.base_x, 2)
-
         btn_y = (self.height() - self.btn_prev.height()) // 2
         self.btn_prev.move(2, btn_y)
         self.btn_next.move(self.width() - self.btn_next.width() - 2, btn_y)
         self.btn_prev.raise_()
         self.btn_next.raise_()
-
-        parent_geo = self.parent_slot.frameGeometry()
-        
-        # カルーセル自体の位置 (親の下/上)
         global_top_left = self.parent_slot.mapToGlobal(QPoint(0, 0))
         target_global_x = global_top_left.x()
-        
         if self.position_mode == 'top':
             target_global_y = global_top_left.y() - self.height() - self.margin_from_frame
         else:
             target_global_y = global_top_left.y() + self.parent_slot.height() + self.margin_from_frame
-            
         self.move(target_global_x, target_global_y)
 
     def slide(self, direction):
@@ -1697,53 +1374,203 @@ class CarouselWindow(QWidget):
         if angle > 0: self.parent_slot.change_image(-1) 
         else: self.parent_slot.change_image(1)
 
-    # ★ 追加: 右クリックメニューとダブルクリック判定
     def contextMenuEvent(self, event):
         if self.manager.is_locked: return
-        if self.suppress_context_menu:
-            self.suppress_context_menu = False
-            return
         menu = QMenu(self)
-        
-        # Translate context menu
-        add_text = "スロットを追加"
-        move_text = "モニター外の表示を戻す"
-        list_text = "一覧リストを表示"
-        toggle_text = "サムネイルの表示/非表示"
-        
-        if self.manager:
-            add_text = self.manager.tr('slot_add')
-            move_text = self.manager.tr('slot_move_back')
-            list_text = self.manager.tr('menu_view_list')
-            toggle_text = self.manager.tr('menu_toggle_carousel')
-
+        add_text = self.manager.tr('slot_add')
+        move_text = self.manager.tr('slot_move_back')
+        list_text = self.manager.tr('menu_view_list')
+        toggle_text = self.manager.tr('menu_toggle_carousel')
         add_slot_action = QAction(add_text, self)
-        add_slot_action.triggered.connect(self.add_new_slot)
+        add_slot_action.triggered.connect(self.parent_slot.add_new_slot)
         menu.addAction(add_slot_action)
-        
         move_screen_action = QAction(move_text, self)
-        move_screen_action.triggered.connect(self.move_inside_screen)
+        move_screen_action.triggered.connect(self.parent_slot.move_inside_screen)
         menu.addAction(move_screen_action)
-        
         menu.addSeparator()
-
         action_list = QAction(list_text, self)
-        action_list.triggered.connect(self.action_list)
+        action_list.triggered.connect(self.parent_slot.action_list)
         menu.addAction(action_list)
-        
         action_toggle = QAction(toggle_text, self)
         action_toggle.setCheckable(True)
-        if self.manager:
-            action_toggle.setChecked(self.manager.params['show_carousel'])
-            action_toggle.triggered.connect(self.manager.toggle_global_carousel)
+        action_toggle.setChecked(self.manager.params['show_carousel'])
+        action_toggle.triggered.connect(self.manager.toggle_global_carousel)
         menu.addAction(action_toggle)
-        
         menu.exec(event.globalPos())
 
     def mouseDoubleClickEvent(self, event):
-        # 白枠（選択中画像）の中ならリスト表示
         if self.selection_border.geometry().contains(event.pos()):
             self.parent_slot.action_list()
+
+# ---------------------------------------------------------
+# Custom Dialog for Settings
+# ---------------------------------------------------------
+class SlideshowSettingsDialog(QDialog):
+    def __init__(self, params, get_text_func, parent=None):
+        super().__init__(parent)
+        self.get_text = get_text_func
+        self.setWindowTitle(self.get_text('settings_title'))
+        self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setMinimumWidth(320)
+        self.reset_requested = False 
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        h_lang = QHBoxLayout()
+        h_lang.addWidget(QLabel(self.get_text('language')))
+        self.combo_lang = QComboBox()
+        self.combo_lang.addItem("日本語", "ja")
+        self.combo_lang.addItem("English", "en")
+        current_lang = params.get('language', 'ja')
+        idx = self.combo_lang.findData(current_lang)
+        if idx >= 0: self.combo_lang.setCurrentIndex(idx)
+        h_lang.addWidget(self.combo_lang)
+        h_lang.addStretch()
+        layout.addLayout(h_lang)
+        grp_slide = QGroupBox(self.get_text('slideshow_group'))
+        v_slide = QVBoxLayout()
+        self.chk_active = QCheckBox(self.get_text('active'))
+        self.chk_active.setChecked(params['active'])
+        v_slide.addWidget(self.chk_active)
+        self.chk_random = QCheckBox(self.get_text('random'))
+        self.chk_random.setChecked(params['random'])
+        v_slide.addWidget(self.chk_random)
+        h_interval = QHBoxLayout()
+        h_interval.addWidget(QLabel(self.get_text('interval')))
+        self.spin_interval = QSpinBox()
+        self.spin_interval.setRange(1, 3600)
+        self.spin_interval.setValue(params['interval'])
+        self.spin_interval.setSuffix(self.get_text('interval_suffix'))
+        h_interval.addWidget(self.spin_interval)
+        v_slide.addLayout(h_interval)
+        v_fade = QVBoxLayout()
+        h_fade_label = QHBoxLayout()
+        h_fade_label.addWidget(QLabel(self.get_text('fade')))
+        self.label_fade_val = QLabel(f"{params['fade']:.1f}" + self.get_text('fade_suffix'))
+        h_fade_label.addWidget(self.label_fade_val)
+        h_fade_label.addStretch()
+        v_fade.addLayout(h_fade_label)
+        self.slider_fade = QSlider(Qt.Orientation.Horizontal)
+        self.slider_fade.setRange(0, 50) 
+        self.slider_fade.setValue(int(params['fade'] * 10))
+        self.slider_fade.valueChanged.connect(lambda v: self.label_fade_val.setText(f"{v/10.0:.1f}" + self.get_text('fade_suffix')))
+        v_fade.addWidget(self.slider_fade)
+        v_slide.addLayout(v_fade)
+        grp_slide.setLayout(v_slide)
+        layout.addWidget(grp_slide)
+        grp_view = QGroupBox(self.get_text('view_group'))
+        v_view = QVBoxLayout()
+        h_layer = QHBoxLayout()
+        h_layer.addWidget(QLabel(self.get_text('layer')))
+        self.combo_layer = QComboBox()
+        self.combo_layer.addItems([self.get_text('layer_top'), self.get_text('layer_normal'), self.get_text('layer_bottom')])
+        layer_map = {'top': 0, 'normal': 1, 'bottom': 2}
+        self.combo_layer.setCurrentIndex(layer_map.get(params['layer_mode'], 1))
+        h_layer.addWidget(self.combo_layer)
+        v_view.addLayout(h_layer)
+        h_anchor = QHBoxLayout()
+        h_anchor.addWidget(QLabel(self.get_text('anchor_group')))
+        self.combo_anchor = QComboBox()
+        anchors = [('center', 'anchor_center'), ('top-left', 'anchor_top_left'), ('top-right', 'anchor_top_right'), ('bottom-left', 'anchor_bottom_left'), ('bottom-right', 'anchor_bottom_right')]
+        for key, text_key in anchors: self.combo_anchor.addItem(self.get_text(text_key), key)
+        idx = self.combo_anchor.findData(params.get('anchor_mode', 'center'))
+        self.combo_anchor.setCurrentIndex(max(0, idx))
+        h_anchor.addWidget(self.combo_anchor)
+        v_view.addLayout(h_anchor)
+        h_thumb = QHBoxLayout()
+        h_thumb.addWidget(QLabel(self.get_text('thumb_pos')))
+        self.combo_thumb = QComboBox()
+        self.combo_thumb.addItems([self.get_text('pos_top'), self.get_text('pos_bottom')])
+        self.combo_thumb.setCurrentIndex(0 if params['carousel_pos'] == 'top' else 1)
+        h_thumb.addWidget(self.combo_thumb)
+        v_view.addLayout(h_thumb)
+        self.chk_show_carousel = QCheckBox(self.get_text('show_carousel'))
+        self.chk_show_carousel.setChecked(params['show_carousel'])
+        v_view.addWidget(self.chk_show_carousel)
+        grp_view.setLayout(v_view)
+        layout.addWidget(grp_view)
+        grp_btn = QGroupBox(self.get_text('btn_group'))
+        v_btn = QVBoxLayout()
+        self.chk_btn_visible = QCheckBox(self.get_text('btn_visible'))
+        self.chk_btn_visible.setChecked(params['btn_visible'])
+        v_btn.addWidget(self.chk_btn_visible)
+        v_btn_size = QVBoxLayout()
+        h_btn_size_label = QHBoxLayout()
+        h_btn_size_label.addWidget(QLabel(self.get_text('btn_size')))
+        self.label_size_val = QLabel(f"{params['btn_size']} px")
+        h_btn_size_label.addWidget(self.label_size_val)
+        h_btn_size_label.addStretch()
+        v_btn_size.addLayout(h_btn_size_label)
+        self.slider_size = QSlider(Qt.Orientation.Horizontal)
+        self.slider_size.setRange(1, 20) 
+        self.slider_size.setValue(int(params['btn_size'] / 10))
+        self.slider_size.valueChanged.connect(lambda v: self.label_size_val.setText(f"{v * 10} px"))
+        v_btn_size.addWidget(self.slider_size)
+        v_btn.addLayout(v_btn_size)
+        v_opacity = QVBoxLayout()
+        h_op_label = QHBoxLayout()
+        h_op_label.addWidget(QLabel(self.get_text('btn_opacity')))
+        self.label_op_val = QLabel(f"{int(params['btn_opacity'] * 100)}%")
+        h_op_label.addWidget(self.label_op_val)
+        h_op_label.addStretch()
+        v_opacity.addLayout(h_op_label)
+        self.slider_opacity = QSlider(Qt.Orientation.Horizontal)
+        self.slider_opacity.setRange(0, 4) 
+        self.slider_opacity.setValue(int(params['btn_opacity'] * 4))
+        self.slider_opacity.valueChanged.connect(lambda v: self.label_op_val.setText(f"{v * 25}%"))
+        v_opacity.addWidget(self.slider_opacity)
+        v_btn.addLayout(v_opacity)
+        grp_btn.setLayout(v_btn)
+        layout.addWidget(grp_btn)
+        self.chk_startup = QCheckBox(self.get_text('startup'))
+        self.chk_startup.setChecked(params['startup'])
+        layout.addWidget(self.chk_startup)
+        layout.addSpacing(10)
+        hbox_btns = QHBoxLayout()
+        btn_reset = QPushButton(self.get_text('reset_btn'))
+        btn_reset.clicked.connect(self.reset_form)
+        hbox_btns.addWidget(btn_reset)
+        hbox_btns.addStretch()
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        hbox_btns.addWidget(btns)
+        layout.addLayout(hbox_btns)
+        self.adjustSize() 
+
+    def reset_form(self):
+        self.chk_active.setChecked(False)
+        self.chk_random.setChecked(False)
+        self.spin_interval.setValue(10)
+        self.slider_fade.setValue(10) 
+        self.combo_layer.setCurrentIndex(1) 
+        self.combo_anchor.setCurrentIndex(0) 
+        self.combo_thumb.setCurrentIndex(0) 
+        self.chk_show_carousel.setChecked(True) 
+        self.chk_btn_visible.setChecked(False)
+        self.slider_size.setValue(4) 
+        self.slider_opacity.setValue(2) 
+        self.chk_startup.setChecked(False)
+        self.reset_requested = True
+
+    def get_values(self):
+        layer_indices = {0: 'top', 1: 'normal', 2: 'bottom'}
+        return {
+            'language': self.combo_lang.currentData(),
+            'interval': self.spin_interval.value(),
+            'active': self.chk_active.isChecked(),
+            'random': self.chk_random.isChecked(),
+            'fade': self.slider_fade.value() / 10.0,
+            'layer_mode': layer_indices[self.combo_layer.currentIndex()],
+            'anchor_mode': self.combo_anchor.currentData(), 
+            'carousel_pos': 'top' if self.combo_thumb.currentIndex() == 0 else 'bottom',
+            'show_carousel': self.chk_show_carousel.isChecked(),
+            'btn_visible': self.chk_btn_visible.isChecked(),
+            'btn_size': self.slider_size.value() * 10,
+            'btn_opacity': self.slider_opacity.value() * 0.25,
+            'startup': self.chk_startup.isChecked(),
+            'reset_requested': self.reset_requested
+        }
 
 # ---------------------------------------------------------
 # Main Image Slot
@@ -1755,15 +1582,11 @@ class ImageSlot(QWidget):
         self.current_index = image_index
         self.pixmap = None
         self.scale_factor = 1.0
-        
-        # ★ 追加: 画像のオフセット管理変数
         self.img_offset = QPointF(0.0, 0.0)
         self.start_img_offset = QPointF(0.0, 0.0)
-        
         self.old_pixmap = None
-        self.old_scale_factor = 1.0  # ★ フェード時のサイズズレ防止用
+        self.old_scale_factor = 1.0  
         self.transition_progress = 0.0
-        
         self.is_ui_visible = False
         self.border_opacity = 0.0
         self.drag_pos = None
@@ -1773,39 +1596,25 @@ class ImageSlot(QWidget):
         self.suppress_context_menu = False
         self.border_margin = 10
         self.slideshow_random = False 
-        
-        self.setMinimumSize(50, 50) # 緩和
+        self.setMinimumSize(50, 50) 
         self.settings = QSettings("Tokitoma", "FloatRef")
-
-        if self.manager:
-            self.setWindowIcon(self.manager.app_icon)
-        else:
-            self.setWindowIcon(self.create_gray_icon())
+        if self.manager: self.setWindowIcon(self.manager.app_icon)
+        else: self.setWindowIcon(self.create_gray_icon())
 
         self.initUI()
         self.tooltip_window = CustomTooltip()
-
         self.carousel = CarouselWindow(self)
-        pos_mode = self.settings.value("carousel_pos", "top")
-        self.carousel.set_position_mode(pos_mode)
-
+        self.carousel.set_position_mode(self.settings.value("carousel_pos", "top"))
         self.list_overlay = ListViewOverlay()
         self.list_overlay.image_selected.connect(self.jump_to_image)
         self.list_overlay.images_selected_to_open.connect(self.request_open_multiple)
 
         self.btn_fit = OverlayButton("Fit", "btn_fit_hint", self)
         self.btn_fit.clicked.connect(self.action_fit)
-        
         self.btn_trim = OverlayButton("Trim", "btn_trim_hint", self)
         self.btn_trim.clicked.connect(self.action_trim)
-        
         self.btn_list = OverlayButton("List", "btn_list_hint", self)
         self.btn_list.clicked.connect(self.action_list)
-        
-        # 最小化ボタン
-        self.btn_min = QPushButton("－", self)
-        self.btn_min.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_min.setFixedSize(24, 24)
         btn_style = """
             QPushButton {
                 background-color: rgba(0, 0, 0, 150); color: white;
@@ -1814,12 +1623,11 @@ class ImageSlot(QWidget):
             }
             QPushButton:hover { background-color: rgba(150, 150, 150, 200); border-color: white; }
         """
+        self.btn_min = QPushButton("－", self)
+        self.btn_min.setFixedSize(24, 24)
         self.btn_min.setStyleSheet(btn_style)
         self.btn_min.clicked.connect(self.hide)
-
-        # 閉じるボタン
         self.btn_close = QPushButton("✕", self)
-        self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_close.setFixedSize(24, 24)
         self.btn_close.setStyleSheet(btn_style)
         self.btn_close.clicked.connect(self.close)
@@ -1829,52 +1637,35 @@ class ImageSlot(QWidget):
         self.eff_list = QGraphicsOpacityEffect(self.btn_list)
         self.eff_min = QGraphicsOpacityEffect(self.btn_min)
         self.eff_close = QGraphicsOpacityEffect(self.btn_close)
-        
-        self.eff_fit.setOpacity(0.0)
-        self.eff_trim.setOpacity(0.0)
-        self.eff_list.setOpacity(0.0)
-        self.eff_min.setOpacity(0.0)
-        self.eff_close.setOpacity(0.0)
-        
+        for eff in [self.eff_fit, self.eff_trim, self.eff_list, self.eff_min, self.eff_close]: eff.setOpacity(0.0)
         self.btn_fit.setGraphicsEffect(self.eff_fit)
         self.btn_trim.setGraphicsEffect(self.eff_trim)
         self.btn_list.setGraphicsEffect(self.eff_list)
         self.btn_min.setGraphicsEffect(self.eff_min)
         self.btn_close.setGraphicsEffect(self.eff_close)
-        
-        self.btn_fit.hide()
-        self.btn_trim.hide()
-        self.btn_list.hide()
-        self.btn_min.hide()
-        self.btn_close.hide()
+        for btn in [self.btn_fit, self.btn_trim, self.btn_list, self.btn_min, self.btn_close]: btn.hide()
 
         self.hint_timer = QTimer(self)
         self.hint_timer.setSingleShot(True)
         self.hint_timer.setInterval(1000) 
         self.hint_timer.timeout.connect(self.show_pending_hint)
         self.pending_hint_text = ""
-
         self.show_delay_timer = QTimer(self)
         self.show_delay_timer.setSingleShot(True)
         self.show_delay_timer.setInterval(200) 
         self.show_delay_timer.timeout.connect(self.fade_in_ui)
-
         self.hover_check_timer = QTimer(self)
         self.hover_check_timer.setInterval(50) 
         self.hover_check_timer.timeout.connect(self.check_hover_state)
-        
         self.hide_timer = QTimer(self)
         self.hide_timer.setSingleShot(True)
         self.hide_timer.setInterval(700)
         self.hide_timer.timeout.connect(self.fade_out_ui)
-
         self.slide_timer = QTimer(self)
         self.slide_timer.setInterval(10000) 
-        self.slide_timer.timeout.connect(lambda: self.handle_slideshow_tick())
-
+        self.slide_timer.timeout.connect(self.handle_slideshow_tick)
         self.anim_group = QParallelAnimationGroup()
         self.setup_animations()
-        
         self.fade_anim = QVariantAnimation()
         self.fade_anim.setDuration(200) 
         self.fade_anim.setStartValue(0.0)
@@ -1883,13 +1674,12 @@ class ImageSlot(QWidget):
         self.fade_anim.finished.connect(self.on_fade_finished_img)
 
     def refresh_carousel_visibility(self):
-        """カルーセルの表示設定が変更されたときに呼ばれる"""
         if self.manager.params['show_carousel'] and self.is_ui_visible:
             if self.carousel.anim_slide.state() != QAbstractAnimation.State.Running:
                 self.carousel.update_content()
-                self.carousel.update_position()
+            self.carousel.update_position()
             self.carousel.show()
-            self.anim_carousel.setEndValue(1.0) # アニメーションターゲットも更新
+            self.anim_carousel.setEndValue(1.0)
             self.carousel.setWindowOpacity(1.0)
         else:
             self.carousel.hide()
@@ -1898,14 +1688,12 @@ class ImageSlot(QWidget):
     def jump_to_image(self, index):
         if not stack_manager.image_paths: return
         self.current_index = index
-        self.update_image_source() # or refresh_content_keep_frame
+        self.update_image_source()
 
-    def update_text(self):
-        pass
+    def update_text(self): pass
 
     def request_open_multiple(self, items):
-        if self.manager:
-            self.manager.open_multiple_windows(items)
+        if self.manager: self.manager.open_multiple_windows(items)
 
     def create_gray_icon(self):
         pix = QPixmap(64, 64)
@@ -1917,74 +1705,45 @@ class ImageSlot(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMouseTracking(True)
         self.setAcceptDrops(True)
-        if self.settings.value("geometry"):
-            self.restoreGeometry(self.settings.value("geometry"))
-        else:
-            self.resize(300, 300)
+        if self.settings.value("geometry"): self.restoreGeometry(self.settings.value("geometry"))
+        else: self.resize(300, 300)
 
-    def set_fade_duration(self, duration_sec):
-        self.fade_anim.setDuration(int(duration_sec * 1000))
+    def set_fade_duration(self, duration_sec): self.fade_anim.setDuration(int(duration_sec * 1000))
 
-    def set_carousel_position(self, mode):
-        self.carousel.set_position_mode(mode)
+    def set_carousel_position(self, mode): self.carousel.set_position_mode(mode)
 
     def set_layer_mode(self, mode):
         flags = Qt.WindowType.FramelessWindowHint
-        if mode == 'top':
-            flags |= Qt.WindowType.WindowStaysOnTopHint
-        elif mode == 'bottom':
-            flags |= Qt.WindowType.WindowStaysOnBottomHint
-        
+        if mode == 'top': flags |= Qt.WindowType.WindowStaysOnTopHint
+        elif mode == 'bottom': flags |= Qt.WindowType.WindowStaysOnBottomHint
         was_visible = self.isVisible()
         self.hide()
         self.setWindowFlags(flags)
-        
         sub_flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
-        if mode == 'top':
-            sub_flags |= Qt.WindowType.WindowStaysOnTopHint
-        elif mode == 'bottom':
-            sub_flags |= Qt.WindowType.WindowStaysOnBottomHint
-            
+        if mode == 'top': sub_flags |= Qt.WindowType.WindowStaysOnTopHint
+        elif mode == 'bottom': sub_flags |= Qt.WindowType.WindowStaysOnBottomHint
         self.carousel.setWindowFlags(sub_flags)
-        # リストだけは常に最前面にするフラグを設定
-        list_flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint
-        self.list_overlay.setWindowFlags(list_flags)
-        
+        self.list_overlay.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
         tooltip_flags = Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint
-        if mode == 'top':
-            tooltip_flags |= Qt.WindowType.WindowStaysOnTopHint
-        elif mode == 'bottom':
-            tooltip_flags |= Qt.WindowType.WindowStaysOnBottomHint
+        if mode == 'top': tooltip_flags |= Qt.WindowType.WindowStaysOnTopHint
+        elif mode == 'bottom': tooltip_flags |= Qt.WindowType.WindowStaysOnBottomHint
         self.tooltip_window.setWindowFlags(tooltip_flags)
-
-        if was_visible:
-            self.show()
+        if was_visible: self.show()
 
     def set_locked(self, locked):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, locked)
         if locked:
             self.is_ui_visible = False
-            self.carousel.hide()
-            self.btn_fit.hide()
-            self.btn_trim.hide()
-            self.btn_list.hide()
-            self.btn_min.hide()
-            self.btn_close.hide()
-            self.tooltip_window.hide()
+            for obj in [self.carousel, self.btn_fit, self.btn_trim, self.btn_list, self.btn_min, self.btn_close, self.tooltip_window]: obj.hide()
             self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def force_close(self):
-        self.tooltip_window.close()
-        self.list_overlay.close()
-        self.carousel.close()
+        for obj in [self.tooltip_window, self.list_overlay, self.carousel]: obj.close()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         super().close()
 
     def closeEvent(self, event):
-        # 個別ウィンドウでの geometry 保存は廃止（一括保存に移行）
-        self.tooltip_window.hide()
-        self.list_overlay.hide()
-        self.carousel.hide()
+        for obj in [self.tooltip_window, self.list_overlay, self.carousel]: obj.hide()
         self.manager.on_window_closed(self) 
         event.accept()
 
@@ -2002,89 +1761,54 @@ class ImageSlot(QWidget):
 
     def show_pending_hint(self):
         current_pos = QCursor.pos()
-        window_rect = self.frameGeometry()
-        if not window_rect.adjusted(-20, -20, 20, 20).contains(current_pos):
-            return 
-        if self.pending_hint_text:
-            self.tooltip_window.show_at(current_pos, self.pending_hint_text)
+        if not self.frameGeometry().adjusted(-20, -20, 20, 20).contains(current_pos): return 
+        if self.pending_hint_text: self.tooltip_window.show_at(current_pos, self.pending_hint_text)
 
     def mousePressEvent(self, event):
         if self.manager.is_locked: return
         self.cancel_hint()
-        # ★ 追加: クリック時にもスイッチボタンを手前に
-        if self.manager:
-            self.manager.bring_switch_to_front()
-            
+        if self.manager: self.manager.bring_switch_to_front()
         if self.resize_edge:
-            if event.button() == Qt.MouseButton.LeftButton:
-                # ★ 左クリック: Fitしてからリサイズ開始
-                self.action_fit() # 一旦Fitさせる
-                self.resizing = True
-                self.resize_button = event.button()
-                self.drag_pos = event.globalPosition().toPoint()
-                self.start_geometry = self.geometry()
-                self.suppress_context_menu = True
-                return
-            elif event.button() == Qt.MouseButton.RightButton:
-                # ★ 右クリック: 枠のみリサイズ (開始時にオフセットを保存)
-                self.resizing = True
-                self.resize_button = event.button()
-                self.drag_pos = event.globalPosition().toPoint()
-                self.start_geometry = self.geometry()
-                self.start_img_offset = QPointF(self.img_offset) # 現在のオフセットを保存
-                self.suppress_context_menu = True
-                return
-
+            if event.button() == Qt.MouseButton.LeftButton: self.action_fit()
+            self.resizing = True
+            self.resize_button = event.button()
+            self.drag_pos = event.globalPosition().toPoint()
+            self.start_geometry = self.geometry()
+            self.start_img_offset = QPointF(self.img_offset)
+            self.suppress_context_menu = True
+            return
         if event.button() == Qt.MouseButton.RightButton:
             self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self.suppress_context_menu = False
         elif event.button() == Qt.MouseButton.MiddleButton:
-             # ★ 中クリック: パン開始
-             self.drag_pos = event.globalPosition().toPoint()
-             self.suppress_context_menu = True
+            self.drag_pos = event.globalPosition().toPoint()
+            self.suppress_context_menu = True
 
     def mouseMoveEvent(self, event):
         if self.manager.is_locked: return
-        
-        # ★ 追加: ダイアログ表示中はホバー反応を無効化
         if QApplication.activeModalWidget(): 
-            if self.is_ui_visible:
-                self.hide_timer.start(0) 
+            if self.is_ui_visible: self.hide_timer.start(0) 
             return
-
-        # ★ 追加: マウス移動中もスイッチボタンを手前に（重くなる場合はここを削除してもOK）
-        if self.manager:
-            self.manager.bring_switch_to_front()
-
+        if self.manager: self.manager.bring_switch_to_front()
         if self.resizing:
             self.handle_resize(event)
             self.update_satellites()
             return
-        
-        # 右ドラッグ（ウィンドウ移動）
         if event.buttons() & Qt.MouseButton.RightButton and self.drag_pos:
-            move_vector = (event.globalPosition().toPoint() - self.drag_pos) - self.frameGeometry().topLeft()
-            if move_vector.manhattanLength() > 5:
+            curr_pos = event.globalPosition().toPoint()
+            if (curr_pos - self.drag_pos - self.frameGeometry().topLeft()).manhattanLength() > 5:
                 self.suppress_context_menu = True
-                self.move(event.globalPosition().toPoint() - self.drag_pos)
+                self.move(curr_pos - self.drag_pos)
                 self.update_satellites()
             return
-
-        # ★ 中ドラッグ（画像パン）
         if event.buttons() & Qt.MouseButton.MiddleButton and self.drag_pos:
             curr_pos = event.globalPosition().toPoint()
-            diff = curr_pos - self.drag_pos
+            self.img_offset += QPointF(curr_pos - self.drag_pos)
             self.drag_pos = curr_pos
-            
-            # オフセットを加算
-            self.img_offset += QPointF(diff)
             self.update()
             return
-
-        if self.pixmap is not None:
-            self.update_cursor(event.pos())
-        if not self.hover_check_timer.isActive():
-             self.hover_check_timer.start()
+        if self.pixmap is not None: self.update_cursor(event.pos())
+        if not self.hover_check_timer.isActive(): self.hover_check_timer.start()
 
     def mouseReleaseEvent(self, event):
         self.resizing = False
@@ -2094,15 +1818,11 @@ class ImageSlot(QWidget):
         child = self.childAt(pos)
         if child:
             self.setCursor(Qt.CursorShape.ArrowCursor)
-            if not isinstance(child, OverlayButton):
-                self.cancel_hint()
+            if not isinstance(child, OverlayButton): self.cancel_hint()
             return
-
-        m = self.border_margin
-        w, h = self.width(), self.height()
+        m, w, h = self.border_margin, self.width(), self.height()
         x, y = pos.x(), pos.y()
         self.resize_edge = None
-        
         if x < m and y < m: self.resize_edge = 'top-left'
         elif x > w-m and y < m: self.resize_edge = 'top-right'
         elif x < m and y > h-m: self.resize_edge = 'bottom-left'
@@ -2111,88 +1831,41 @@ class ImageSlot(QWidget):
         elif x > w-m: self.resize_edge = 'right'
         elif y < m: self.resize_edge = 'top'
         elif y > h-m: self.resize_edge = 'bottom'
-        
-        cursors = {
-            'top-left': Qt.CursorShape.SizeFDiagCursor, 
-            'bottom-right': Qt.CursorShape.SizeFDiagCursor, 
-            'top-right': Qt.CursorShape.SizeBDiagCursor, 
-            'bottom-left': Qt.CursorShape.SizeBDiagCursor, 
-            'left': Qt.CursorShape.SizeHorCursor, 
-            'right': Qt.CursorShape.SizeHorCursor, 
-            'top': Qt.CursorShape.SizeVerCursor, 
-            'bottom': Qt.CursorShape.SizeVerCursor
-        }
-        
+        cursors = {'top-left': Qt.CursorShape.SizeFDiagCursor, 'bottom-right': Qt.CursorShape.SizeFDiagCursor, 'top-right': Qt.CursorShape.SizeBDiagCursor, 'bottom-left': Qt.CursorShape.SizeBDiagCursor, 'left': Qt.CursorShape.SizeHorCursor, 'right': Qt.CursorShape.SizeHorCursor, 'top': Qt.CursorShape.SizeVerCursor, 'bottom': Qt.CursorShape.SizeVerCursor}
         if self.resize_edge: 
             self.setCursor(cursors[self.resize_edge])
             if not self.tooltip_window.isVisible() and not self.hint_timer.isActive():
-                if self.manager:
-                    self.pending_hint_text = self.manager.tr('resize_hint')
-                else:
-                    self.pending_hint_text = "Resize"
+                self.pending_hint_text = self.manager.tr('resize_hint') if self.manager else "Resize"
                 self.hint_timer.start()
         else: 
             self.setCursor(Qt.CursorShape.ArrowCursor)
             self.cancel_hint()
 
     def wheelEvent(self, event):
-        if self.manager.is_locked: return # ★ 追加: ロック中はズーム無効
-        
-        if self.pixmap is None: return
-        
-        # ★ ホイール: カーソル位置中心ズーム
-        # 現在のカーソル位置（ウィンドウ内座標）
+        if self.manager.is_locked or self.pixmap is None: return
         cursor_pos = event.position()
-        
-        # カーソル位置における「画像内の相対座標」を逆算
         rel_vec = cursor_pos - self.img_offset
-        
-        angle = event.angleDelta().y()
-        zoom_factor = 1.1 if angle > 0 else 1/1.1
-        
-        new_scale = self.scale_factor * zoom_factor
-        
-        # 新しいオフセットを計算
-        new_offset = cursor_pos - (rel_vec * zoom_factor)
-        
-        self.scale_factor = new_scale
-        self.img_offset = new_offset
-        
+        zoom = 1.1 if event.angleDelta().y() > 0 else 1/1.1
+        self.scale_factor *= zoom
+        self.img_offset = cursor_pos - (rel_vec * zoom)
         self.update()
 
     def action_fit(self):
-        if self.pixmap is None: return
-        self.calculate_fit_scale()
-        self.update() 
+        if self.pixmap: self.calculate_fit_scale(); self.update() 
 
     def action_trim(self):
-        if self.pixmap is None: return
-        self.resize_window_to_image_size() 
+        if self.pixmap: self.resize_window_to_image_size() 
 
     def action_list(self):
-        if not stack_manager.image_paths: return
-        self.list_overlay.show_fullscreen()
+        if stack_manager.image_paths: self.list_overlay.show_fullscreen()
 
     def resize_window_to_image_size(self):
-        target_w = int(self.pixmap.width() * self.scale_factor) + 4
-        target_h = int(self.pixmap.height() * self.scale_factor) + 4
-        
-        # 中心維持でリサイズ
-        current_geo = self.geometry()
-        center = current_geo.center()
-        new_x = center.x() - (target_w // 2)
-        new_y = center.y() - (target_h // 2)
-        
-        # 画面内チェック
-        screen_geo = self.screen().availableGeometry()
-        if target_w > screen_geo.width(): target_w = screen_geo.width()
-        if target_h > screen_geo.height(): target_h = screen_geo.height()
-        
-        self.setGeometry(new_x, new_y, target_w, target_h)
-        
-        # Trimした時点でFit（中央）状態にする
+        tw, th = int(self.pixmap.width() * self.scale_factor) + 4, int(self.pixmap.height() * self.scale_factor) + 4
+        center = self.geometry().center()
+        screen = self.screen().availableGeometry()
+        tw, th = min(tw, screen.width()), min(th, screen.height())
+        self.setGeometry(center.x() - tw//2, center.y() - th//2, tw, th)
         self.calculate_fit_scale()
-        
         self.update_satellites()
 
     def update_satellites(self):
@@ -2203,92 +1876,44 @@ class ImageSlot(QWidget):
     def move_inside_screen(self):
         screen = self.screen().availableGeometry()
         geo = self.frameGeometry()
-        should_resize = False
-        new_w = geo.width()
-        new_h = geo.height()
-        if new_w > screen.width():
-            new_w = screen.width()
-            should_resize = True
-        if new_h > screen.height():
-            new_h = screen.height()
-            should_resize = True
-        if should_resize:
-            if self.pixmap:
-                self.scale_factor = min((new_w - 4) / self.pixmap.width(), (new_h - 4) / self.pixmap.height())
-                # リサイズ時はFitさせる
-                self.calculate_fit_scale()
-
-            self.resize(new_w, new_h)
+        nw, nh = min(geo.width(), screen.width()), min(geo.height(), screen.height())
+        if nw != geo.width() or nh != geo.height():
+            if self.pixmap: self.calculate_fit_scale()
+            self.resize(nw, nh)
             geo = self.frameGeometry()
-            
-        new_x, new_y = geo.x(), geo.y()
-        if geo.right() > screen.right(): new_x = screen.right() - geo.width()
-        if new_x < screen.left(): new_x = screen.left()
-        if geo.bottom() > screen.bottom(): new_y = screen.bottom() - geo.height()
-        if new_y < screen.top(): new_y = screen.top()
-        if new_x != geo.x() or new_y != geo.y():
-            self.move(new_x, new_y)
-            self.update_satellites()
+        nx, ny = max(screen.left(), min(geo.x(), screen.right() - geo.width())), max(screen.top(), min(geo.y(), screen.bottom() - geo.height()))
+        if nx != geo.x() or ny != geo.y(): self.move(nx, ny); self.update_satellites()
 
     def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.move_inside_screen()
+        if event.button() == Qt.MouseButton.LeftButton: self.move_inside_screen()
 
     def resizeEvent(self, event):
         self.update_satellites()
         super().resizeEvent(event)
 
-    # ★ 追加: 右クリックメニューとダブルクリック判定
     def contextMenuEvent(self, event):
-        if self.manager.is_locked: return
-        if self.suppress_context_menu:
-            self.suppress_context_menu = False
-            return
+        if self.manager.is_locked or self.suppress_context_menu: return
         menu = QMenu(self)
-        
-        # Translate context menu
-        add_text = "スロットを追加"
-        move_text = "モニター外の表示を戻す"
-        list_text = "一覧リストを表示"
-        toggle_text = "サムネイルの表示/非表示"
-        btn_vis_text = "スイッチボタンを表示" # Default
-        
-        if self.manager:
-            add_text = self.manager.tr('slot_add')
-            move_text = self.manager.tr('slot_move_back')
-            list_text = self.manager.tr('menu_view_list')
-            toggle_text = self.manager.tr('menu_toggle_carousel')
-            btn_vis_text = self.manager.tr('menu_show_switch_btn')
-
-        add_slot_action = QAction(add_text, self)
+        add_slot_action = QAction(self.manager.tr('slot_add'), self)
         add_slot_action.triggered.connect(self.add_new_slot)
         menu.addAction(add_slot_action)
-        
-        move_screen_action = QAction(move_text, self)
+        move_screen_action = QAction(self.manager.tr('slot_move_back'), self)
         move_screen_action.triggered.connect(self.move_inside_screen)
         menu.addAction(move_screen_action)
-        
         menu.addSeparator()
-
-        action_list = QAction(list_text, self)
+        action_list = QAction(self.manager.tr('menu_view_list'), self)
         action_list.triggered.connect(self.action_list)
         menu.addAction(action_list)
-        
-        action_toggle = QAction(toggle_text, self)
+        action_toggle = QAction(self.manager.tr('menu_toggle_carousel'), self)
         action_toggle.setCheckable(True)
-        if self.manager:
-            action_toggle.setChecked(self.manager.params['show_carousel'])
-            action_toggle.triggered.connect(self.manager.toggle_global_carousel)
+        action_toggle.setChecked(self.manager.params['show_carousel'])
+        action_toggle.triggered.connect(self.manager.toggle_global_carousel)
         menu.addAction(action_toggle)
-        
-        # ★ スイッチボタン表示切替を追加
-        action_btn_vis = QAction(btn_vis_text, self)
+        action_btn_vis = QAction(self.manager.tr('menu_show_switch_btn'), self)
         action_btn_vis.setCheckable(True)
-        if self.manager:
-            action_btn_vis.setChecked(self.manager.params['btn_visible'])
-            action_btn_vis.triggered.connect(self.toggle_switch_btn_visible)
+        action_btn_vis.setChecked(self.manager.params['btn_visible'])
+        action_btn_vis.triggered.connect(self.toggle_switch_btn_visible)
         menu.addAction(action_btn_vis)
-        
         menu.exec(event.globalPos())
 
     def toggle_switch_btn_visible(self, checked):
@@ -2298,30 +1923,12 @@ class ImageSlot(QWidget):
             self.manager.apply_settings()
 
     def add_new_slot(self):
-        if self.manager:
-            new_pos = self.pos() + QPoint(20, 20)
-            new_win = self.manager.create_window(new_pos, next_image=True)
+        if self.manager: self.manager.create_window(self.pos() + QPoint(20, 20), next_image=True)
 
     def setup_animations(self):
-        self.anim_group = QParallelAnimationGroup()
         self.anim_carousel = QPropertyAnimation(self.carousel, b"windowOpacity")
-        self.anim_carousel.setDuration(100)
-        self.anim_group.addAnimation(self.anim_carousel)
-        self.anim_fit = QPropertyAnimation(self.eff_fit, b"opacity")
-        self.anim_fit.setDuration(100)
-        self.anim_group.addAnimation(self.anim_fit)
-        self.anim_trim = QPropertyAnimation(self.eff_trim, b"opacity")
-        self.anim_trim.setDuration(100)
-        self.anim_group.addAnimation(self.anim_trim)
-        self.anim_list = QPropertyAnimation(self.eff_list, b"opacity")
-        self.anim_list.setDuration(100)
-        self.anim_group.addAnimation(self.anim_list)
-        self.anim_min = QPropertyAnimation(self.eff_min, b"opacity")
-        self.anim_min.setDuration(100)
-        self.anim_group.addAnimation(self.anim_min)
-        self.anim_close = QPropertyAnimation(self.eff_close, b"opacity")
-        self.anim_close.setDuration(100)
-        self.anim_group.addAnimation(self.anim_close)
+        self.anim_fit, self.anim_trim, self.anim_list, self.anim_min, self.anim_close = [QPropertyAnimation(eff, b"opacity") for eff in [self.eff_fit, self.eff_trim, self.eff_list, self.eff_min, self.eff_close]]
+        for anim in [self.anim_carousel, self.anim_fit, self.anim_trim, self.anim_list, self.anim_min, self.anim_close]: anim.setDuration(100); self.anim_group.addAnimation(anim)
         self.anim_border = QVariantAnimation()
         self.anim_border.setDuration(100)
         self.anim_border.valueChanged.connect(self.update_border_opacity)
@@ -2333,391 +1940,191 @@ class ImageSlot(QWidget):
         self.update()
 
     def fade_in_ui(self):
-        # ロック中はUIを出さない
-        if self.manager.is_locked: return
-        
-        # ★ 追加: リスト表示中はホバー判定を無効化
-        if self.list_overlay.isVisible():
-            if self.is_ui_visible:
-                self.hide_timer.start(0) # 即座に隠す
+        if self.manager.is_locked or self.list_overlay.isVisible(): 
+            if self.is_ui_visible: self.hide_timer.start(0)
             return
-
         self.hide_timer.stop()
         if self.is_ui_visible: return
         self.is_ui_visible = True
         if self.pixmap:
-            # カルーセル表示設定を確認
-            if self.manager.params['show_carousel']:
-                self.carousel.show()
-                self.carousel.update_content()
-                self.carousel.update_position()
-            else:
-                self.carousel.hide()
-            
-            self.btn_fit.show()
-            self.btn_trim.show()
-            self.btn_list.show()
-            self.btn_min.show()
-            self.btn_close.show()
+            if self.manager.params['show_carousel']: self.carousel.show(); self.carousel.update_content(); self.carousel.update_position()
+            for btn in [self.btn_fit, self.btn_trim, self.btn_list, self.btn_min, self.btn_close]: btn.show()
             self.position_buttons()
         self.anim_group.stop()
-        self.anim_carousel.setEndValue(1.0)
-        self.anim_fit.setEndValue(1.0)
-        self.anim_trim.setEndValue(1.0)
-        self.anim_list.setEndValue(1.0)
-        self.anim_min.setEndValue(1.0)
-        self.anim_close.setEndValue(1.0)
-        self.anim_border.setEndValue(1.0)
-        self.anim_carousel.setStartValue(self.carousel.windowOpacity())
-        self.anim_fit.setStartValue(self.eff_fit.opacity())
-        self.anim_trim.setStartValue(self.eff_trim.opacity())
-        self.anim_list.setStartValue(self.eff_list.opacity())
-        self.anim_min.setStartValue(self.eff_min.opacity())
-        self.anim_close.setStartValue(self.eff_close.opacity())
-        self.anim_border.setStartValue(self.border_opacity)
+        self.anim_carousel.setStartValue(self.carousel.windowOpacity()); self.anim_carousel.setEndValue(1.0)
+        self.anim_fit.setStartValue(self.eff_fit.opacity()); self.anim_fit.setEndValue(1.0)
+        self.anim_trim.setStartValue(self.eff_trim.opacity()); self.anim_trim.setEndValue(1.0)
+        self.anim_list.setStartValue(self.eff_list.opacity()); self.anim_list.setEndValue(1.0)
+        self.anim_min.setStartValue(self.eff_min.opacity()); self.anim_min.setEndValue(1.0)
+        self.anim_close.setStartValue(self.eff_close.opacity()); self.anim_close.setEndValue(1.0)
+        self.anim_border.setStartValue(self.border_opacity); self.anim_border.setEndValue(1.0)
         self.anim_group.start()
 
     def fade_out_ui(self):
         self.anim_group.stop()
         self.anim_carousel.setEndValue(0.0)
-        self.anim_fit.setEndValue(0.0)
-        self.anim_trim.setEndValue(0.0)
-        self.anim_list.setEndValue(0.0)
-        self.anim_min.setEndValue(0.0)
-        self.anim_close.setEndValue(0.0)
+        self.anim_fit.setEndValue(0.0); self.anim_trim.setEndValue(0.0); self.anim_list.setEndValue(0.0); self.anim_min.setEndValue(0.0); self.anim_close.setEndValue(0.0)
         self.anim_border.setEndValue(0.0)
-        self.anim_carousel.setStartValue(self.carousel.windowOpacity())
-        self.anim_fit.setStartValue(self.eff_fit.opacity())
-        self.anim_trim.setStartValue(self.eff_trim.opacity())
-        self.anim_list.setStartValue(self.eff_list.opacity())
-        self.anim_min.setStartValue(self.eff_min.opacity())
-        self.anim_close.setStartValue(self.eff_close.opacity())
-        self.anim_border.setStartValue(self.border_opacity)
         self.anim_group.start()
 
     def on_fade_finished(self):
         if self.border_opacity == 0.0:
             self.is_ui_visible = False
-            self.carousel.hide()
-            self.btn_fit.hide()
-            self.btn_trim.hide()
-            self.btn_list.hide()
-            self.btn_min.hide()
-            self.btn_close.hide()
+            for obj in [self.carousel, self.btn_fit, self.btn_trim, self.btn_list, self.btn_min, self.btn_close]: obj.hide()
 
     def position_buttons(self):
-        m = 10
-        gap = 5
+        m, gap = 10, 5
         self.btn_fit.move(m, m)
         self.btn_trim.move(self.btn_fit.geometry().right() + gap, m)
         self.btn_list.move(self.btn_trim.geometry().right() + gap, m)
         self.btn_close.move(self.width() - self.btn_close.width() - 15, 15)
         self.btn_min.move(self.btn_close.geometry().left() - self.btn_min.width() - 5, 15)
 
-    def set_on_top(self, on_top):
-        # 互換性のため残すが、基本はset_layer_modeを使う
-        mode = 'top' if on_top else 'bottom'
-        self.set_layer_mode(mode)
-
     def set_slideshow_params(self, ms, random_mode):
         self.slide_timer.setInterval(ms)
         self.slideshow_random = random_mode
-        if self.slide_timer.isActive():
-            self.slide_timer.start()
+        if self.slide_timer.isActive(): self.slide_timer.start()
 
     def start_slideshow(self):
-        if not self.slide_timer.isActive() and stack_manager.image_paths:
-            self.slide_timer.start()
+        if not self.slide_timer.isActive() and stack_manager.image_paths: self.slide_timer.start()
 
-    def stop_slideshow(self):
-        self.slide_timer.stop()
+    def stop_slideshow(self): self.slide_timer.stop()
 
     def handle_slideshow_tick(self):
         if not stack_manager.image_paths: return
         if self.slideshow_random and len(stack_manager.image_paths) > 1:
-            total = len(stack_manager.image_paths)
-            next_idx = self.current_index
-            while next_idx == self.current_index:
-                next_idx = random.randint(0, total - 1)
-            direction = 1 
-            if self.carousel.isVisible():
-                self.carousel.slide(direction)
-            self.current_index = next_idx
+            nxt = self.current_index
+            while nxt == self.current_index: nxt = random.randint(0, len(stack_manager.image_paths) - 1)
+            self.current_index = nxt
             self.update_image_source(with_fade=True)
-        else:
-            self.change_image(1, with_fade=True)
+        else: self.change_image(1, with_fade=True)
 
-    def update_fade_progress(self, v):
-        self.transition_progress = v
-        self.update()
-
-    def on_fade_finished_img(self):
-        self.old_pixmap = None
-        self.transition_progress = 0.0
-        self.update()
+    def update_fade_progress(self, v): self.transition_progress = v; self.update()
+    def on_fade_finished_img(self): self.old_pixmap = None; self.transition_progress = 0.0; self.update()
 
     def update_image_source(self, with_fade=False):
         if not stack_manager.image_paths: return
-        if with_fade and self.pixmap:
-            self.old_pixmap = self.pixmap
-            self.old_scale_factor = self.scale_factor
-            self.transition_progress = 0.0
-        idx = self.current_index % len(stack_manager.image_paths)
-        path = stack_manager.image_paths[idx]
-        pix = stack_manager.get_pixmap(path)
+        if with_fade and self.pixmap: self.old_pixmap = self.pixmap; self.old_scale_factor = self.scale_factor; self.transition_progress = 0.0
+        pix = stack_manager.get_pixmap(stack_manager.image_paths[self.current_index % len(stack_manager.image_paths)])
         if not pix.isNull():
             self.pixmap = pix
-            # 画像切り替え時はFitさせる
             self.calculate_fit_scale()
-            
-            # カルーセル表示更新
-            if self.manager.params['show_carousel'] and self.is_ui_visible:
-                if self.carousel.anim_slide.state() == QAbstractAnimation.State.Running:
-                    pass 
-                else:
-                    self.carousel.update_content()
-                    self.carousel.update_position()
-            
+            if self.manager.params['show_carousel'] and self.is_ui_visible and self.carousel.anim_slide.state() != QAbstractAnimation.State.Running: self.carousel.update_content(); self.carousel.update_position()
             self.update_satellites()
-            if with_fade:
-                self.fade_anim.start()
-            else:
-                self.fade_in_ui()
-                self.update()
+            if with_fade: self.fade_anim.start()
+            else: self.fade_in_ui(); self.update()
 
     def change_image(self, direction, with_fade=False):
         if not stack_manager.image_paths: return
-        if self.carousel.isVisible():
-            self.carousel.slide(direction)
+        if self.carousel.isVisible(): self.carousel.slide(direction)
         self.current_index += direction
         self.update_image_source(with_fade=with_fade)
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing); painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        alpha = int(50 * self.border_opacity) if self.pixmap else 50
+        if alpha > 0: painter.setBrush(QColor(0, 0, 0, alpha)); painter.setPen(Qt.PenStyle.NoPen); painter.drawRect(self.rect())
         if self.pixmap is None:
-            bg_alpha = 50
-        else:
-            bg_alpha = int(50 * self.border_opacity)
-        
-        if bg_alpha > 0:
-            painter.setBrush(QColor(0, 0, 0, bg_alpha))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRect(self.rect())
-
-        if self.pixmap is None:
-            pen = QPen(QColor(255, 255, 255, 255))
-            pen.setWidth(2)
-            painter.setPen(pen)
-            painter.drawRect(self.rect().adjusted(1, 1, -1, -1))
-            painter.setFont(QFont("Arial", 12))
-            
-            text = "Drop here"
-            if self.manager: text = self.manager.tr('drop_text')
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, text)
+            painter.setPen(QPen(QColor(255, 255, 255))); painter.drawRect(self.rect().adjusted(1, 1, -1, -1))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.manager.tr('drop_text') if self.manager else "Drop here")
             return
-
-        border_w = 2
-        area_rect = self.rect().adjusted(border_w, border_w, -border_w, -border_w)
-        
-        # ★ 変更: オフセットを使って描画
-        # 画像サイズ
-        img_w = self.pixmap.width() * self.scale_factor
-        img_h = self.pixmap.height() * self.scale_factor
-        
-        # 描画位置 = 左上(0,0) + 余白(border) + オフセット
-        # img_offset は (0,0) を基準とした相対位置とする
-        # ただし、初期状態では中央に来るように calculate_fit_scale で調整する
-        
-        # 描画先 (QRectFを使用)
-        target_x = area_rect.x() + self.img_offset.x()
-        target_y = area_rect.y() + self.img_offset.y()
-        
-        # フェードアニメーション
+        tx, ty = 2 + self.img_offset.x(), 2 + self.img_offset.y()
+        iw, ih = self.pixmap.width() * self.scale_factor, self.pixmap.height() * self.scale_factor
         if self.old_pixmap and self.fade_anim.state() == QVariantAnimation.State.Running:
             painter.setOpacity(1.0 - self.transition_progress)
-            
-            # 古い画像も同じ位置・サイズで消えていくように描画
-            # ★修正：保存しておいた old_scale_factor を使う
-            w_old = self.old_pixmap.width() * self.old_scale_factor 
-            h_old = self.old_pixmap.height() * self.old_scale_factor
-            
-            # 古い画像のオフセット位置を計算（簡易的には現在の枠位置に合わせつつサイズだけ維持）
-            rect_old = QRectF(target_x, target_y, w_old, h_old)
-            painter.drawPixmap(rect_old, self.old_pixmap, QRectF(self.old_pixmap.rect()))
-            
+            painter.drawPixmap(QRectF(tx, ty, self.old_pixmap.width() * self.old_scale_factor, self.old_pixmap.height() * self.old_scale_factor), self.old_pixmap, QRectF(self.old_pixmap.rect()))
             painter.setOpacity(self.transition_progress)
-            target_rect = QRectF(target_x, target_y, img_w, img_h)
-            painter.drawPixmap(target_rect, self.pixmap, QRectF(self.pixmap.rect()))
-            painter.setOpacity(1.0)
-        else:
-            target_rect = QRectF(target_x, target_y, img_w, img_h)
-            painter.drawPixmap(target_rect, self.pixmap, QRectF(self.pixmap.rect()))
-
+        painter.drawPixmap(QRectF(tx, ty, iw, ih), self.pixmap, QRectF(self.pixmap.rect()))
+        painter.setOpacity(1.0)
         if self.border_opacity > 0:
-            color = QColor(255, 255, 255)
-            color.setAlphaF(self.border_opacity * 0.5)
-            pen = QPen(color)
-            pen.setWidth(2) 
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRect(self.rect().adjusted(1, 1, -1, -1))
-
-    # --- 新しい操作ロジック ---
+            color = QColor(255, 255, 255); color.setAlphaF(self.border_opacity * 0.5)
+            painter.setPen(QPen(color, 2)); painter.setBrush(Qt.BrushStyle.NoBrush); painter.drawRect(self.rect().adjusted(1, 1, -1, -1))
 
     def calculate_fit_scale(self):
-        """画像をウィンドウ枠に合わせてFitさせ、設定されたアンカーに従って配置する"""
         if self.pixmap is None: return
-        
-        win_w = self.width() - 4
-        win_h = self.height() - 4
-        img_w = self.pixmap.width()
-        img_h = self.pixmap.height()
-        
-        self.scale_factor = min(win_w / img_w, win_h / img_h)
-        
-        # 配置オフセット計算
-        disp_w = img_w * self.scale_factor
-        disp_h = img_h * self.scale_factor
-        
+        ww, wh = self.width() - 4, self.height() - 4
+        self.scale_factor = min(ww / self.pixmap.width(), wh / self.pixmap.height())
+        dw, dh = self.pixmap.width() * self.scale_factor, self.pixmap.height() * self.scale_factor
         anchor = self.manager.params.get('anchor_mode', 'center')
-        
-        if anchor == 'top-left':
-            off_x = 0
-            off_y = 0
-        elif anchor == 'top-right':
-            off_x = win_w - disp_w
-            off_y = 0
-        elif anchor == 'bottom-left':
-            off_x = 0
-            off_y = win_h - disp_h
-        elif anchor == 'bottom-right':
-            off_x = win_w - disp_w
-            off_y = win_h - disp_h
-        else: # center
-            off_x = (win_w - disp_w) / 2
-            off_y = (win_h - disp_h) / 2
-        
-        self.img_offset = QPointF(off_x, off_y)
+        if anchor == 'top-left': ox, oy = 0, 0
+        elif anchor == 'top-right': ox, oy = ww - dw, 0
+        elif anchor == 'bottom-left': ox, oy = 0, wh - dh
+        elif anchor == 'bottom-right': ox, oy = ww - dw, wh - dh
+        else: ox, oy = (ww - dw) / 2, (wh - dh) / 2
+        self.img_offset = QPointF(ox, oy)
 
     def handle_resize(self, event):
-        global_pos = event.globalPosition().toPoint()
-        diff = global_pos - self.drag_pos
-        geo = self.start_geometry
-        new_geo = QRect(geo)
-        
-        # 1. 枠の変更量を計算
-        dx, dy = 0, 0
-        
-        if 'right' in self.resize_edge: 
-            new_geo.setRight(geo.right() + diff.x())
-            dx = diff.x()
-        if 'left' in self.resize_edge: 
-            # 最小サイズを考慮した新しい左端を計算
-            new_left = geo.left() + diff.x()
-            if geo.right() - new_left < 50:
-                new_left = geo.right() - 50
-            new_geo.setLeft(new_left)
-            dx = -diff.x() 
-        if 'bottom' in self.resize_edge: 
-            new_geo.setBottom(geo.bottom() + diff.y())
-            dy = diff.y()
-        if 'top' in self.resize_edge: 
-            # 最小サイズを考慮した新しい上端を計算
-            new_top = geo.top() + diff.y()
-            if geo.bottom() - new_top < 50:
-                new_top = geo.bottom() - 50
-            new_geo.setTop(new_top)
-            dy = -diff.y()
-
-        # 最小サイズ制限は setLeft/setTop 時に考慮済みだが念のため
-        if new_geo.width() < 50: new_geo.setWidth(50)
-        if new_geo.height() < 50: new_geo.setHeight(50)
-        
-        # 2. 画像の調整 (枠のみリサイズの場合、オフセットを先行補正)
+        diff = event.globalPosition().toPoint() - self.drag_pos
+        new_geo = QRect(self.start_geometry)
+        if 'right' in self.resize_edge: new_geo.setRight(self.start_geometry.right() + diff.x())
+        if 'left' in self.resize_edge: new_geo.setLeft(min(self.start_geometry.right() - 50, self.start_geometry.left() + diff.x()))
+        if 'bottom' in self.resize_edge: new_geo.setBottom(self.start_geometry.bottom() + diff.y())
+        if 'top' in self.resize_edge: new_geo.setTop(min(self.start_geometry.bottom() - 50, self.start_geometry.top() + diff.y()))
         if self.pixmap and self.resize_button == Qt.MouseButton.RightButton:
-            # 実際にウィンドウが動いた量（リサイズの結果）を計算
-            actual_moved_x = new_geo.left() - geo.left()
-            actual_moved_y = new_geo.top() - geo.top()
-            
-            # ウィンドウの原点が動いた分だけ、画像を逆方向にずらす
-            if actual_moved_x != 0:
-                self.img_offset.setX(self.start_img_offset.x() - actual_moved_x)
-            if actual_moved_y != 0:
-                self.img_offset.setY(self.start_img_offset.y() - actual_moved_y)
-
-        # 3. 適用 (画像の補正後に枠を動かすことで震えを防ぐ)
+            self.img_offset = QPointF(self.start_img_offset.x() - (new_geo.left() - self.start_geometry.left()), self.start_img_offset.y() - (new_geo.top() - self.start_geometry.top()))
         self.setGeometry(new_geo)
-
-        if self.pixmap and self.resize_button == Qt.MouseButton.LeftButton:
-            # 左ドラッグ: 対称性を維持して拡大（Fit状態をキープ）
-            self.calculate_fit_scale()
-        
-        # ★重要: 左上を動かした時の描画ズレ（揺れ）を防ぐため、即時描画する
+        if self.pixmap and self.resize_button == Qt.MouseButton.LeftButton: self.calculate_fit_scale()
         self.repaint()
 
     def check_hover_state(self):
-        # ★ 追加: ダイアログ表示中はホバー反応を無効化
         if QApplication.activeModalWidget(): 
-            if self.is_ui_visible:
-                self.hide_timer.start(0) 
+            if self.is_ui_visible: self.hide_timer.start(0)
             return
-
         cursor_pos = QCursor.pos()
-        main_hover = self.frameGeometry().contains(cursor_pos)
-        carousel_hover = self.carousel.isVisible() and self.carousel.frameGeometry().contains(cursor_pos)
-        
+        hover = self.frameGeometry().contains(cursor_pos) or (self.carousel.isVisible() and self.carousel.frameGeometry().contains(cursor_pos))
         if self.list_overlay.isVisible():
-            if self.is_ui_visible:
-                self.hide_timer.start(0) 
+            if self.is_ui_visible: self.hide_timer.start(0)
             return
-
         should_show = False
-        
-        if main_hover or carousel_hover:
+        if hover:
             try:
-                point = wintypes.POINT(cursor_pos.x(), cursor_pos.y())
-                hwnd = ctypes.windll.user32.WindowFromPoint(point)
-                
+                hwnd = user32.WindowFromPoint(wintypes.POINT(cursor_pos.x(), cursor_pos.y()))
                 pid = wintypes.DWORD()
-                ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                
-                if pid.value == os.getpid():
-                    should_show = True
-            except Exception:
-                should_show = True 
-        
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if pid.value == os.getpid(): should_show = True
+            except: should_show = True 
         if should_show:
-            if not self.is_ui_visible and not self.show_delay_timer.isActive():
-                self.show_delay_timer.start()
-            if self.is_ui_visible:
-                self.hide_timer.stop()
+            if not self.is_ui_visible and not self.show_delay_timer.isActive(): self.show_delay_timer.start()
+            if self.is_ui_visible: self.hide_timer.stop()
         else:
-            if self.show_delay_timer.isActive():
-                self.show_delay_timer.stop()
-            if self.is_ui_visible and not self.hide_timer.isActive() and self.border_opacity > 0:
-                self.hide_timer.start(700)
+            if self.show_delay_timer.isActive(): self.show_delay_timer.stop()
+            if self.is_ui_visible and not self.hide_timer.isActive() and self.border_opacity > 0: self.hide_timer.start(700)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls(): event.accept()
 
     def dropEvent(self, event):
-        new_files_added = False
+        added = False
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp')):
-                stack_manager.add_image(path)
-                new_files_added = True
-        if new_files_added:
-            self.current_index = len(stack_manager.image_paths) - 1
-            self.update_image_source()
+            if path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp')): stack_manager.add_image(path); added = True
+        if added: self.current_index = len(stack_manager.image_paths) - 1; self.update_image_source()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
-    
+
+    # 二重起動チェック (QSharedMemory)
+    shared_mem_key = "Tokitoma_FloatRef_SingleInstance_Key"
+    shared_memory = QSharedMemory(shared_mem_key)
+
+    # メモリのアタッチを試みる
+    if shared_memory.attach():
+        # 既にメモリが存在する（＝既に起動している）場合
+        # 既存プロセスに対して「再表示しろ」という合図を送るための仕組みが必要。
+        # ここでは単純に「既存プロセスを前面に出す」というメッセージを表示する。
+        # 本来はプロセス間通信(IPC)が必要だが、簡易的にはQSettingsの値を書き換えて
+        # 既存プロセス側のタイマーで検知させる方法などがある。
+        # ここでは「二重起動を検知して終了する」処理を行う。
+        sys.exit(0)
+
+    # 初回起動時：メモリを作成する
+    if not shared_memory.create(1):
+        # 万が一作成に失敗した場合も終了
+        sys.exit(0)
+
+    # アプリケーション本体の起動
     window_manager = WindowManager()
     
     sys.exit(app.exec())

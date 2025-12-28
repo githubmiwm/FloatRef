@@ -1,0 +1,39 @@
+﻿[FloatRef - Help]
+
+■ Basic Operations
+Load Images: Drag and drop image files onto the window or the switch button.
+Move Window: "Right-click" and drag anywhere inside the window.
+Resize Window: "Left-click" and drag the window edges (Maintains aspect ratio).
+ *To crop the frame only, "Right-click" and drag the edges.
+
+■ Mouse Controls
+- Left Drag (on edges): Resize window and image (Aspect ratio maintained)
+- Right Drag (inside window): Move the window itself
+- Right Drag (on edges): Resize frame only (Crop / No image scaling)
+- Middle Drag: Pan image (Move displayed area)
+- Mouse Wheel: Zoom in/out at cursor position
+- Double Click: Bring window back inside the screen
+
+■ Switch Button (Round Icon)
+- Left Click: Toggle Show / Hide all windows
+- Right Click: Show Menu (Add slot, Arrange, Settings, etc.)
+- Right Drag: Move the button position
+- Middle Drag: Move the button position (Alternative)
+
+■ Context Menu (Right Click on Window)
+- Add Slot: Open a new image window
+- Bring back from off-screen: Retrieve windows lost off-screen
+- Show List View: Select images from a list
+- Show/Hide Thumbnails: Toggle the thumbnail carousel
+- Show Switch Button: Toggle visibility of the switch button
+
+■ Overlay Buttons (Hover to show)
+[Fit]  : Fit image to the current window size
+[Trim] : Resize window to fit the current image size
+[List] : Open image list view
+[－]   : Minimize (Hide) window
+[✕]    : Close window (Remove slot)
+
+■ Settings
+Access settings from the Right-Click menu of the Task Tray Icon or Switch Button.
+- Configure Slideshow, Opacity, Lock Controls, Startup settings, and more.

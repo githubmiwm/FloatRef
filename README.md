@@ -2,7 +2,8 @@
 
 A highly customizable, frameless image reference tool for Windows.
 Windows向けのカスタマイズ性の高い、枠なし画像リファレンスツール。
-
+## Demo / デモ
+<video src="https://github.com/user-attachments/assets/ac5d4d92-72dc-4b6a-b205-92b6191351a7" width="100%" controls></video>
 ## Features / 主な機能
 
 - **Frameless Window**: Clean, borderless design.
@@ -39,4 +40,5 @@ pip install PyQt6
 
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
 

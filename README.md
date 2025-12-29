@@ -1,5 +1,6 @@
 ﻿# FloatRef
 A highly customizable, frameless image reference tool for Windows.
+
 Windows向けのカスタマイズ性の高い、枠なし画像リファレンスツール。
 
 ## Overview / 概要
@@ -44,6 +45,7 @@ pip install PyQt6
 
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
 
 
 

@@ -12,7 +12,8 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QPushButton, QGraphicsOpacityEffect, 
                              QListWidget, QListWidgetItem, QSlider, QAbstractItemView,
                              QScrollArea, QFrame, QSystemTrayIcon, QMenu, QMessageBox,
-                             QDialog, QTextEdit, QInputDialog, QSpinBox, QCheckBox, QDialogButtonBox, QComboBox, QGroupBox, QStyle)
+                             QDialog, QTextEdit, QInputDialog, QSpinBox, QCheckBox, 
+                             QDialogButtonBox, QComboBox, QGroupBox, QStyle)
 from PyQt6.QtGui import (QPixmap, QPainter, QPen, QColor, QFont, QCursor, QIcon, 
                          QAction, QActionGroup, QImageReader, QImage, QPolygon)
 from PyQt6.QtCore import (Qt, QSize, QRect, QPoint, QPointF, QRectF, 
@@ -50,8 +51,8 @@ except Exception:
 
 # 関数の引数と戻り値の型を明示的に定義
 user32.SetWindowPos.argtypes = [
-    wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, 
-    ctypes.c_int, ctypes.c_int, ctypes.c_uint
+    wintypes.HWND, wintypes.HWND, ctypes.c_int, 
+    ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint
 ]
 user32.SetWindowPos.restype = wintypes.BOOL
 
@@ -502,7 +503,7 @@ class WindowManager(QObject):
             self.switch_button.move(self.settings.value("btn_pos"))
         else:
             self.switch_button.move(100, 100)
-            
+             
         self.switch_button.toggled.connect(self.toggle_all_visibility)
         if self.params['btn_visible']:
             self.switch_button.show()
@@ -676,18 +677,28 @@ class WindowManager(QObject):
                 new_y = center.y() - (geo.height() // 2)
                 win.move(new_x, new_y)
                 win.move_inside_screen()
-                
+            
         self.bring_switch_to_front()
 
+    # --- 修正: 左上から15px間隔で整列させるロジックに変更 ---
     def arrange_windows_tiled(self):
         if not self.windows: return
+        
         screen = QApplication.primaryScreen().availableGeometry()
+        margin = 15  # 指定された余白
+        
+        # 画面内に収めるためのグリッド計算（サイズ決定用）
         count = len(self.windows)
         cols = math.ceil(math.sqrt(count))
-        rows = math.ceil(count / cols)
-        cell_w = screen.width() // cols
-        cell_h = screen.height() // rows
-
+        
+        # 余白分を引いた有効エリア
+        available_w = screen.width() - (margin * (cols + 1))
+        available_h = screen.height() - (margin * (math.ceil(count / cols) + 1))
+        
+        cell_w = available_w // cols
+        cell_h = available_h // math.ceil(count / cols)
+        
+        # 最小縮小率を計算（全ウィンドウが枠内に収まるように）
         min_ratio = 1.0
         for win in self.windows:
             w, h = win.width(), win.height()
@@ -697,23 +708,38 @@ class WindowManager(QObject):
             if ratio < min_ratio:
                 min_ratio = ratio
 
-        for i, win in enumerate(self.windows):
-            r = i // cols
-            c = i % cols
-            base_x = screen.left() + c * cell_w
-            base_y = screen.top() + r * cell_h
+        # 配置開始位置（画面左上 + マージン）
+        current_x = screen.left() + margin
+        current_y = screen.top() + margin
+        row_max_h = 0
+        
+        for win in self.windows:
+            # サイズ変更（アスペクト比維持）
             new_w = int(win.width() * min_ratio)
             new_h = int(win.height() * min_ratio)
-            target_x = base_x + (cell_w - new_w) // 2
-            target_y = base_y + (cell_h - new_h) // 2
-            win.setGeometry(target_x, target_y, new_w, new_h)
             
+            # 右端をはみ出す場合は次の行へ
+            if current_x + new_w + margin > screen.right():
+                current_x = screen.left() + margin
+                current_y += row_max_h + margin
+                row_max_h = 0  # 新しい行の高さリセット
+
+            # ウィンドウの移動とリサイズ
+            win.setGeometry(current_x, current_y, new_w, new_h)
+            
+            # 画像の内部スケールなども更新
             if win.pixmap:
                 win.scale_factor *= min_ratio
                 win.img_offset *= min_ratio
+                win.update()
             win.update_satellites()
-        
+            
+            # 次の配置位置を計算
+            current_x += new_w + margin
+            row_max_h = max(row_max_h, new_h)
+            
         self.bring_switch_to_front()
+    # ----------------------------------------
 
     def on_window_closed(self, window):
         if window in self.windows:
@@ -798,7 +824,7 @@ class WindowManager(QObject):
             self.settings.setValue("carousel_pos", self.params['carousel_pos'])
             self.settings.setValue("show_carousel", self.params['show_carousel'])
             self.settings.setValue("anchor_mode", self.params['anchor_mode']) 
-            
+        
             self.retranslate_ui()
             self.apply_settings()
         self.restore_layers()
@@ -998,7 +1024,8 @@ class OverlayButton(QPushButton):
                 border: 1px solid rgba(255, 255, 255, 100); border-radius: 4px;
                 font-family: Arial; font-size: 10px; padding: 2px 8px;
             }
-            QPushButton:hover { background-color: rgba(150, 150, 150, 200); }
+            QPushButton:hover { background-color: rgba(150, 150, 150, 200);
+            }
         """)
 
     def enterEvent(self, event):
@@ -1077,13 +1104,17 @@ class ListViewOverlay(QWidget):
         
         ctrl_style = """
             QPushButton {
-                background-color: rgba(255, 255, 255, 30); color: white;
+                background-color: rgba(255, 255, 255, 30);
+                color: white;
                 border: 1px solid rgba(255, 255, 255, 100); border-radius: 10px; font-weight: bold;
                 font-size: 10px;
             }
-            QPushButton:hover { background-color: rgba(255, 255, 255, 80); }
-            QSlider::groove:horizontal { height: 4px; background: #555; border-radius: 2px; }
-            QSlider::handle:horizontal { background: white; width: 14px; margin: -5px 0; border-radius: 7px; }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 80);
+            }
+            QSlider::groove:horizontal { height: 4px; background: #555; border-radius: 2px;
+            }
+            QSlider::handle:horizontal { background: white; width: 14px;
+            margin: -5px 0; border-radius: 7px; }
         """
         self.btn_select_all.setStyleSheet(ctrl_style)
         self.btn_open.setStyleSheet(ctrl_style)
@@ -1112,11 +1143,16 @@ class ListViewOverlay(QWidget):
         self.list_widget.setSelectionRectVisible(True) 
         
         self.list_widget.setStyleSheet("""
-            QListWidget { background-color: transparent; border: none; outline: none; font-size: 0px; }
-            QListWidget::item { color: white; margin: 5px; }
-            QListWidget::item:selected { background-color: rgba(255, 255, 255, 50); border-radius: 5px; }
-            QScrollBar:vertical { border: none; background: rgba(255,255,255,20); width: 10px; }
-            QScrollBar::handle:vertical { background: rgba(255,255,255,100); min-height: 20px; border-radius: 5px; }
+            QListWidget { background-color: transparent;
+            border: none; outline: none; font-size: 0px; }
+            QListWidget::item { color: white;
+            margin: 5px; }
+            QListWidget::item:selected { background-color: rgba(255, 255, 255, 50);
+            border-radius: 5px; }
+            QScrollBar:vertical { border: none; background: rgba(255,255,255,20);
+            width: 10px; }
+            QScrollBar::handle:vertical { background: rgba(255,255,255,100); min-height: 20px;
+            border-radius: 5px; }
         """)
         self.layout.addWidget(self.list_widget)
         
@@ -1231,11 +1267,13 @@ class CarouselWindow(QWidget):
 
         nav_btn_style = """
             QPushButton {
-                background-color: rgba(0, 0, 0, 150); color: white;
+                background-color: rgba(0, 0, 0, 150);
+                color: white;
                 border: 1px solid rgba(255, 255, 255, 100);
                 border-radius: 12px; font-family: Arial; font-weight: bold; font-size: 14px; padding-bottom: 2px;
             }
-            QPushButton:hover { background-color: rgba(150, 150, 150, 200); border-color: white; }
+            QPushButton:hover { background-color: rgba(150, 150, 150, 200);
+                border-color: white; }
         """
         self.btn_prev = QPushButton("<", self)
         self.btn_prev.setFixedSize(24, 24)
@@ -1583,9 +1621,14 @@ class ImageSlot(QWidget):
         self.pixmap = None
         self.scale_factor = 1.0
         self.img_offset = QPointF(0.0, 0.0)
+        
+        # --- 修正: 古い画像のオフセット保存変数を追加 ---
+        self.old_img_offset = QPointF(0.0, 0.0) 
         self.start_img_offset = QPointF(0.0, 0.0)
         self.old_pixmap = None
         self.old_scale_factor = 1.0  
+        # ----------------------------------------------
+        
         self.transition_progress = 0.0
         self.is_ui_visible = False
         self.border_opacity = 0.0
@@ -1596,6 +1639,7 @@ class ImageSlot(QWidget):
         self.suppress_context_menu = False
         self.border_margin = 10
         self.slideshow_random = False 
+  
         self.setMinimumSize(50, 50) 
         self.settings = QSettings("Tokitoma", "FloatRef")
         if self.manager: self.setWindowIcon(self.manager.app_icon)
@@ -1619,9 +1663,11 @@ class ImageSlot(QWidget):
             QPushButton {
                 background-color: rgba(0, 0, 0, 150); color: white;
                 border: 1px solid rgba(255, 255, 255, 100);
-                border-radius: 12px; font-family: Arial; font-weight: bold; font-size: 10px; padding-bottom: 2px;
+                border-radius: 12px; font-family: Arial; font-weight: bold;
+                font-size: 10px; padding-bottom: 2px;
             }
-            QPushButton:hover { background-color: rgba(150, 150, 150, 200); border-color: white; }
+            QPushButton:hover { background-color: rgba(150, 150, 150, 200);
+                border-color: white; }
         """
         self.btn_min = QPushButton("－", self)
         self.btn_min.setFixedSize(24, 24)
@@ -1643,6 +1689,7 @@ class ImageSlot(QWidget):
         self.btn_list.setGraphicsEffect(self.eff_list)
         self.btn_min.setGraphicsEffect(self.eff_min)
         self.btn_close.setGraphicsEffect(self.eff_close)
+    
         for btn in [self.btn_fit, self.btn_trim, self.btn_list, self.btn_min, self.btn_close]: btn.hide()
 
         self.hint_timer = QTimer(self)
@@ -1654,6 +1701,7 @@ class ImageSlot(QWidget):
         self.show_delay_timer.setSingleShot(True)
         self.show_delay_timer.setInterval(200) 
         self.show_delay_timer.timeout.connect(self.fade_in_ui)
+        
         self.hover_check_timer = QTimer(self)
         self.hover_check_timer.setInterval(50) 
         self.hover_check_timer.timeout.connect(self.check_hover_state)
@@ -1666,6 +1714,7 @@ class ImageSlot(QWidget):
         self.slide_timer.timeout.connect(self.handle_slideshow_tick)
         self.anim_group = QParallelAnimationGroup()
         self.setup_animations()
+  
         self.fade_anim = QVariantAnimation()
         self.fade_anim.setDuration(200) 
         self.fade_anim.setStartValue(0.0)
@@ -1730,12 +1779,27 @@ class ImageSlot(QWidget):
         self.tooltip_window.setWindowFlags(tooltip_flags)
         if was_visible: self.show()
 
+    # --- 修正: ロック時にUIを強制非表示にする ---
     def set_locked(self, locked):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, locked)
         if locked:
             self.is_ui_visible = False
-            for obj in [self.carousel, self.btn_fit, self.btn_trim, self.btn_list, self.btn_min, self.btn_close, self.tooltip_window]: obj.hide()
+            # タイマー停止
+            self.hide_timer.stop()
+            self.show_delay_timer.stop()
+            self.hint_timer.stop()
+            
+            # 全UIパーツを強制非表示
+            for obj in [self.carousel, self.btn_fit, self.btn_trim, self.btn_list, self.btn_min, self.btn_close, self.tooltip_window]:
+                obj.hide()
+            
+            # 枠線のアニメーション停止と透明度リセット
+            self.anim_group.stop()
+            self.border_opacity = 0.0
+            self.update()
+            
             self.setCursor(Qt.CursorShape.ArrowCursor)
+    # ----------------------------------------
 
     def force_close(self):
         for obj in [self.tooltip_window, self.list_overlay, self.carousel]: obj.close()
@@ -2002,17 +2066,26 @@ class ImageSlot(QWidget):
     def update_fade_progress(self, v): self.transition_progress = v; self.update()
     def on_fade_finished_img(self): self.old_pixmap = None; self.transition_progress = 0.0; self.update()
 
+    # --- 修正: 画像更新時に現在のオフセットを保存する ---
     def update_image_source(self, with_fade=False):
         if not stack_manager.image_paths: return
-        if with_fade and self.pixmap: self.old_pixmap = self.pixmap; self.old_scale_factor = self.scale_factor; self.transition_progress = 0.0
+        if with_fade and self.pixmap: 
+            self.old_pixmap = self.pixmap
+            self.old_scale_factor = self.scale_factor
+            self.old_img_offset = QPointF(self.img_offset) # 現在のオフセットを退避
+            self.transition_progress = 0.0
+            
         pix = stack_manager.get_pixmap(stack_manager.image_paths[self.current_index % len(stack_manager.image_paths)])
         if not pix.isNull():
             self.pixmap = pix
             self.calculate_fit_scale()
-            if self.manager.params['show_carousel'] and self.is_ui_visible and self.carousel.anim_slide.state() != QAbstractAnimation.State.Running: self.carousel.update_content(); self.carousel.update_position()
+            if self.manager.params['show_carousel'] and self.is_ui_visible and self.carousel.anim_slide.state() != QAbstractAnimation.State.Running: 
+                self.carousel.update_content()
+                self.carousel.update_position()
             self.update_satellites()
             if with_fade: self.fade_anim.start()
             else: self.fade_in_ui(); self.update()
+    # ----------------------------------------
 
     def change_image(self, direction, with_fade=False):
         if not stack_manager.image_paths: return
@@ -2020,26 +2093,53 @@ class ImageSlot(QWidget):
         self.current_index += direction
         self.update_image_source(with_fade=with_fade)
 
+    # --- 修正: paintEventで古い画像の描画に保存したオフセットを使用する ---
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing); painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        
         alpha = int(50 * self.border_opacity) if self.pixmap else 50
-        if alpha > 0: painter.setBrush(QColor(0, 0, 0, alpha)); painter.setPen(Qt.PenStyle.NoPen); painter.drawRect(self.rect())
+        if alpha > 0: 
+            painter.setBrush(QColor(0, 0, 0, alpha))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(self.rect())
+            
         if self.pixmap is None:
-            painter.setPen(QPen(QColor(255, 255, 255))); painter.drawRect(self.rect().adjusted(1, 1, -1, -1))
+            painter.setPen(QPen(QColor(255, 255, 255)))
+            painter.drawRect(self.rect().adjusted(1, 1, -1, -1))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.manager.tr('drop_text') if self.manager else "Drop here")
             return
+            
+        # 新しい画像の描画位置
         tx, ty = 2 + self.img_offset.x(), 2 + self.img_offset.y()
         iw, ih = self.pixmap.width() * self.scale_factor, self.pixmap.height() * self.scale_factor
+        
+        # クロスフェード処理
         if self.old_pixmap and self.fade_anim.state() == QVariantAnimation.State.Running:
             painter.setOpacity(1.0 - self.transition_progress)
-            painter.drawPixmap(QRectF(tx, ty, self.old_pixmap.width() * self.old_scale_factor, self.old_pixmap.height() * self.old_scale_factor), self.old_pixmap, QRectF(self.old_pixmap.rect()))
+            
+            # ここで退避しておいた old_img_offset を使用して、古い画像の位置を固定する
+            old_tx = 2 + self.old_img_offset.x()
+            old_ty = 2 + self.old_img_offset.y()
+            old_w = self.old_pixmap.width() * self.old_scale_factor
+            old_h = self.old_pixmap.height() * self.old_scale_factor
+            
+            painter.drawPixmap(QRectF(old_tx, old_ty, old_w, old_h), self.old_pixmap, QRectF(self.old_pixmap.rect()))
+            
             painter.setOpacity(self.transition_progress)
+            
+        # 新しい画像の描画
         painter.drawPixmap(QRectF(tx, ty, iw, ih), self.pixmap, QRectF(self.pixmap.rect()))
+        
         painter.setOpacity(1.0)
         if self.border_opacity > 0:
-            color = QColor(255, 255, 255); color.setAlphaF(self.border_opacity * 0.5)
-            painter.setPen(QPen(color, 2)); painter.setBrush(Qt.BrushStyle.NoBrush); painter.drawRect(self.rect().adjusted(1, 1, -1, -1))
+            color = QColor(255, 255, 255)
+            color.setAlphaF(self.border_opacity * 0.5)
+            painter.setPen(QPen(color, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(self.rect().adjusted(1, 1, -1, -1))
+    # ----------------------------------------
 
     def calculate_fit_scale(self):
         if self.pixmap is None: return
@@ -2111,17 +2211,10 @@ if __name__ == '__main__':
 
     # メモリのアタッチを試みる
     if shared_memory.attach():
-        # 既にメモリが存在する（＝既に起動している）場合
-        # 既存プロセスに対して「再表示しろ」という合図を送るための仕組みが必要。
-        # ここでは単純に「既存プロセスを前面に出す」というメッセージを表示する。
-        # 本来はプロセス間通信(IPC)が必要だが、簡易的にはQSettingsの値を書き換えて
-        # 既存プロセス側のタイマーで検知させる方法などがある。
-        # ここでは「二重起動を検知して終了する」処理を行う。
         sys.exit(0)
 
     # 初回起動時：メモリを作成する
     if not shared_memory.create(1):
-        # 万が一作成に失敗した場合も終了
         sys.exit(0)
 
     # アプリケーション本体の起動
